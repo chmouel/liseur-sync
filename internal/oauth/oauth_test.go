@@ -211,6 +211,54 @@ func TestCodeExchangeWithoutRedirectURI(t *testing.T) {
 	}
 }
 
+func TestCredentialsRemainBoundToOriginalResource(t *testing.T) {
+	f := newFixture(t)
+	code := f.code(t, "lsc_public")
+	otherCode := f.code(t, "lsc_public")
+	status, body := f.token(exchange(otherCode, "lsc_public"))
+	if status != http.StatusOK {
+		t.Fatalf("initial exchange: %d %v", status, body)
+	}
+	refresh := body["refresh_token"].(string)
+	original := f.srv
+	cfg := config.Default()
+	cfg.MCP.Enabled = true
+	cfg.MCP.PublicURL = "https://new.example"
+	f.srv = oauth.New(f.st, cfg)
+	f.srv.SetClock(func() time.Time { return f.now })
+	for _, target := range []string{"", "https://new.example/mcp", resource} {
+		form := exchange(code, "lsc_public")
+		if target == "" {
+			form.Del("resource")
+		} else {
+			form.Set("resource", target)
+		}
+		status, body := f.token(form)
+		want := "invalid_grant"
+		if target == resource {
+			want = "invalid_target"
+		}
+		if status != http.StatusBadRequest || body["error"] != want {
+			t.Fatalf("code target %q: %d %v", target, status, body)
+		}
+		form = url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {"lsc_public"}}
+		if target != "" {
+			form.Set("resource", target)
+		}
+		status, body = f.token(form)
+		if status != http.StatusBadRequest || body["error"] != want {
+			t.Fatalf("refresh target %q: %d %v", target, status, body)
+		}
+	}
+	f.srv = original
+	if status, body := f.token(exchange(code, "lsc_public")); status != http.StatusOK {
+		t.Fatalf("original code spent: %d %v", status, body)
+	}
+	if status, body := f.token(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {"lsc_public"}}); status != http.StatusOK {
+		t.Fatalf("original refresh spent: %d %v", status, body)
+	}
+}
+
 func TestExchangeRejects(t *testing.T) {
 	f := newFixture(t)
 	cases := map[string]func(url.Values) url.Values{

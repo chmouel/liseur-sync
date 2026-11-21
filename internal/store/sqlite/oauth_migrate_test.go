@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +50,16 @@ func TestOAuthClientGenerationUpgrade(t *testing.T) {
 	}
 	if _, err := s.OAuthAccess(ctx, "token", now); err != nil {
 		t.Fatalf("access after upgrade: %v", err)
+	}
+	var id, parent, unused int
+	var plan string
+	if err := s.db.QueryRowContext(ctx, `EXPLAIN QUERY PLAN SELECT 1 FROM oauth_tokens active
+		WHERE active.grant_id = ? AND active.used_at IS NULL AND active.expires_at >= ?`, "grant", formatTime(now)).
+		Scan(&id, &parent, &unused, &plan); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan, "oauth_tokens_unused_grant_expiry") {
+		t.Fatalf("cleanup lookup does not use the unused-token index: %s", plan)
 	}
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatal(err)

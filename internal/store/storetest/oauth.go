@@ -108,6 +108,12 @@ func testOAuth(t *testing.T, open OpenFunc) {
 	}
 
 	code("code-1", u.ID)
+	if _, err := s.ExchangeOAuthCode(ctx, store.OAuthCodeRedemption{
+		SHA256: "code-1", ClientID: client.ID, RedirectURI: testOAuthRedirect,
+		CodeChallenge: testOAuthChallenge, GrantID: "wrong-resource",
+	}, now); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("code exchange without expected resource: %v", err)
+	}
 	g, err := exchange("code-1", "grant-1", "g1", now)
 	if err != nil || g.UserID != u.ID || g.ID != "grant-1" || g.ClientID != client.ID ||
 		g.ClientName != "Example" || g.Resource != testOAuthResource || len(g.Scopes) != 2 {
@@ -146,28 +152,37 @@ func testOAuth(t *testing.T, open OpenFunc) {
 	if _, err := exchange("code-2", "grant-2", "g2", now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RotateOAuthRefresh(ctx, "g2-refresh", "lsc_custom", now, tokens("g2b", now)); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.RotateOAuthRefresh(ctx, "g2-refresh", "lsc_custom", testOAuthResource, now, tokens("g2b", now)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("refresh by another client: %v", err)
 	}
+	if _, err := s.RotateOAuthRefresh(ctx, "g2-refresh", client.ID, "other-resource", now, tokens("wrong", now)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("refresh for another resource: %v", err)
+	}
 	later := now.Add(2 * time.Hour)
-	g, err = s.RotateOAuthRefresh(ctx, "g2-refresh", client.ID, later, tokens("g2b", later))
+	g, err = s.RotateOAuthRefresh(ctx, "g2-refresh", client.ID, testOAuthResource, later, tokens("g2b", later))
 	if err != nil || g.ID != "grant-2" || g.UserID != u.ID || len(g.Scopes) != 2 {
 		t.Fatalf("rotate: %+v %v", g, err)
 	}
 	if _, err := s.OAuthAccess(ctx, "g2b-access", later); err != nil {
 		t.Fatalf("rotated access token: %v", err)
 	}
-	if _, err := s.RotateOAuthRefresh(ctx, "g2-access", client.ID, later, tokens("x", later)); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.RotateOAuthRefresh(ctx, "g2-access", client.ID, testOAuthResource, later, tokens("x", later)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("an access token must not refresh: %v", err)
 	}
+	if _, err := s.RotateOAuthRefresh(ctx, "g2-refresh", client.ID, "other-resource", later, tokens("wrong-replay", later)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("replay for another resource: %v", err)
+	}
+	if _, err := s.OAuthAccess(ctx, "g2b-access", later); err != nil {
+		t.Fatalf("wrong-resource replay revoked the grant: %v", err)
+	}
 	// Reusing the spent refresh token revokes the whole grant.
-	if _, err := s.RotateOAuthRefresh(ctx, "g2-refresh", client.ID, later, tokens("g2c", later)); !errors.Is(err, store.ErrConflict) {
+	if _, err := s.RotateOAuthRefresh(ctx, "g2-refresh", client.ID, testOAuthResource, later, tokens("g2c", later)); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("refresh reuse: %v", err)
 	}
 	if _, err := s.OAuthAccess(ctx, "g2b-access", later); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("refresh reuse must revoke the grant: %v", err)
 	}
-	if _, err := s.RotateOAuthRefresh(ctx, "g2b-refresh", client.ID, later, tokens("g2d", later)); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.RotateOAuthRefresh(ctx, "g2b-refresh", client.ID, testOAuthResource, later, tokens("g2d", later)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a revoked grant must not refresh: %v", err)
 	}
 
@@ -215,7 +230,7 @@ func testOAuth(t *testing.T, open OpenFunc) {
 	if _, err := s.OAuthAccess(ctx, "go-access", now); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("disabled account: %v", err)
 	}
-	if _, err := s.RotateOAuthRefresh(ctx, "go-refresh", client.ID, now, tokens("go2", now)); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.RotateOAuthRefresh(ctx, "go-refresh", client.ID, testOAuthResource, now, tokens("go2", now)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("disabled account refresh: %v", err)
 	}
 
@@ -323,18 +338,27 @@ func testOAuthReplayAfterHousekeep(t *testing.T, open OpenFunc) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	previous := "old-refresh"
+	for day := 1; day <= 10; day++ {
+		at := now.Add(time.Duration(day) * 24 * time.Hour)
+		prefix := fmt.Sprintf("rotated-%d", day)
+		if _, err := s.RotateOAuthRefresh(ctx, previous, client.ID, testOAuthResource, at, newTokens(prefix, at)); err != nil {
+			t.Fatal(err)
+		}
+		previous = prefix + "-refresh"
+	}
 	rotated := now.Add(29 * 24 * time.Hour)
-	if _, err := s.RotateOAuthRefresh(ctx, "old-refresh", client.ID, rotated, newTokens("new", rotated)); err != nil {
+	if _, err := s.RotateOAuthRefresh(ctx, previous, client.ID, testOAuthResource, rotated, newTokens("new", rotated)); err != nil {
 		t.Fatal(err)
 	}
 	later := now.Add(31 * 24 * time.Hour)
 	if err := s.Housekeep(ctx, later); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RotateOAuthRefresh(ctx, "old-refresh", client.ID, later, newTokens("replay", later)); !errors.Is(err, store.ErrConflict) {
+	if _, err := s.RotateOAuthRefresh(ctx, "old-refresh", client.ID, testOAuthResource, later, newTokens("replay", later)); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("replay after housekeeping: %v", err)
 	}
-	if _, err := s.RotateOAuthRefresh(ctx, "new-refresh", client.ID, later, newTokens("again", later)); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.RotateOAuthRefresh(ctx, "new-refresh", client.ID, testOAuthResource, later, newTokens("again", later)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("grant remained active: %v", err)
 	}
 	if err := s.Housekeep(ctx, now.Add(90*24*time.Hour)); err != nil {
@@ -522,7 +546,7 @@ func testOAuthRefreshReuseDuringRotation(t *testing.T, open OpenFunc) {
 				{SHA256: fmt.Sprintf("win%d-access", i), Kind: store.OAuthTokenAccess, CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
 				{SHA256: fmt.Sprintf("win%d-refresh", i), Kind: store.OAuthTokenRefresh, CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)},
 			}
-			g, err := s.RotateOAuthRefresh(ctx, "rot-refresh", client.ID, now, tokens)
+			g, err := s.RotateOAuthRefresh(ctx, "rot-refresh", client.ID, testOAuthResource, now, tokens)
 			mu.Lock()
 			defer mu.Unlock()
 			switch {

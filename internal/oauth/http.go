@@ -205,6 +205,10 @@ func (s *Server) exchangeCode(w http.ResponseWriter, r *http.Request, client Cli
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_request", Description: "code and code_verifier are required"})
 		return
 	}
+	if res := f.Get("resource"); res != "" && res != s.resource {
+		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_target"})
+		return
+	}
 	now := s.now().UTC()
 	// The verifier never reaches the store: it decides which S256
 	// challenge the request presents, and the store matches that inside
@@ -221,7 +225,7 @@ func (s *Server) exchangeCode(w http.ResponseWriter, r *http.Request, client Cli
 	}
 	g, err := s.st.ExchangeOAuthCode(r.Context(), store.OAuthCodeRedemption{
 		SHA256: auth.HashSecret(code), ClientID: client.ID, RedirectURI: f.Get("redirect_uri"),
-		CodeChallenge: challenge, Resource: f.Get("resource"),
+		CodeChallenge: challenge, Resource: s.resource,
 		GrantID: store.NewID(), Tokens: tokens,
 	}, now)
 	if errors.Is(err, store.ErrConflict) {
@@ -262,7 +266,7 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request, client Client) 
 		writeJSON(w, http.StatusInternalServerError, tokenError{Error: "server_error"})
 		return
 	}
-	g, err := s.st.RotateOAuthRefresh(r.Context(), auth.HashSecret(rt), client.ID, s.now().UTC(), tokens)
+	g, err := s.st.RotateOAuthRefresh(r.Context(), auth.HashSecret(rt), client.ID, s.resource, s.now().UTC(), tokens)
 	if errors.Is(err, store.ErrConflict) {
 		slog.Warn("oauth: refresh token reused; grant revoked", "client", client.ID)
 	}

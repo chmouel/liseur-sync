@@ -206,7 +206,7 @@ func TestHousekeepDuringOAuthRefreshRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := now.Add(29 * 24 * time.Hour)
-	if _, err := s.RotateOAuthRefresh(ctx, "old-refresh", client.ID, first, tokens("current", first)); err != nil {
+	if _, err := s.RotateOAuthRefresh(ctx, "old-refresh", client.ID, "resource", first, tokens("current", first)); err != nil {
 		t.Fatal(err)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -224,7 +224,7 @@ func TestHousekeepDuringOAuthRefreshRotation(t *testing.T) {
 	rotationTime := now.Add(58 * 24 * time.Hour)
 	rotationDone := make(chan error, 1)
 	go func() {
-		_, err := s.RotateOAuthRefresh(ctx, "current-refresh", client.ID, rotationTime, tokens("next", rotationTime))
+		_, err := s.RotateOAuthRefresh(ctx, "current-refresh", client.ID, "resource", rotationTime, tokens("next", rotationTime))
 		rotationDone <- err
 	}()
 	for {
@@ -271,10 +271,10 @@ func TestHousekeepDuringOAuthRefreshRotation(t *testing.T) {
 	if err := <-housekeepDone; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RotateOAuthRefresh(ctx, "old-refresh", client.ID, housekeepTime, tokens("replay", housekeepTime)); !errors.Is(err, store.ErrConflict) {
+	if _, err := s.RotateOAuthRefresh(ctx, "old-refresh", client.ID, "resource", housekeepTime, tokens("replay", housekeepTime)); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("replay after concurrent housekeeping: %v", err)
 	}
-	if _, err := s.RotateOAuthRefresh(ctx, "next-refresh", client.ID, housekeepTime, tokens("again", housekeepTime)); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.RotateOAuthRefresh(ctx, "next-refresh", client.ID, "resource", housekeepTime, tokens("again", housekeepTime)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("grant remained active: %v", err)
 	}
 }
@@ -326,7 +326,7 @@ func TestOAuthRefreshReuseAfterGrantLockWait(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := s.RotateOAuthRefresh(ctx, "refresh", client.ID, now, nil)
+		_, err := s.RotateOAuthRefresh(ctx, "refresh", client.ID, "resource", now, nil)
 		done <- err
 	}()
 	for {

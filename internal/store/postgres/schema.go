@@ -1080,6 +1080,10 @@ ALTER TABLE oauth_clients ADD COLUMN generation TEXT NOT NULL DEFAULT '';
 UPDATE oauth_clients SET generation = gen_random_uuid()::text;
 `
 
+const oauthUnusedTokensIndex = `
+CREATE INDEX oauth_tokens_unused_grant_expiry ON oauth_tokens(grant_id, expires_at) WHERE used_at IS NULL;
+`
+
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
 	folderBackfill, statisticsStorage, comparisonRollupEvidence,
@@ -1102,6 +1106,7 @@ var migrations = []string{
 	vocabularySync,
 	oauthAssistants,
 	oauthClientGenerations,
+	oauthUnusedTokensIndex,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1135,6 +1140,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"vocabularySync":           vocabularySync,
 		"oauthAssistants":          oauthAssistants,
 		"oauthClientGenerations":   oauthClientGenerations,
+		"oauthUnusedTokensIndex":   oauthUnusedTokensIndex,
 	}
 	want, ok := named[name]
 	if !ok {

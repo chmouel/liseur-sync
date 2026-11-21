@@ -153,7 +153,7 @@ func (s *Store) ExchangeOAuthCode(ctx context.Context, r store.OAuthCodeRedempti
 		return store.OAuthGrant{}, err
 	}
 	if clientID != r.ClientID || (r.RedirectURI != "" && redirectURI != r.RedirectURI) || challenge != r.CodeChallenge ||
-		(r.Resource != "" && r.Resource != resource) {
+		r.Resource != resource {
 		return store.OAuthGrant{}, store.ErrNotFound
 	}
 	if used != nil {
@@ -265,7 +265,7 @@ func (s *Store) OAuthAccess(ctx context.Context, sha256 string, now time.Time) (
 }
 
 func (s *Store) RotateOAuthRefresh(
-	ctx context.Context, sha256, clientID string, now time.Time, tokens []store.OAuthToken,
+	ctx context.Context, sha256, clientID, resource string, now time.Time, tokens []store.OAuthToken,
 ) (store.OAuthGrant, error) {
 	var g store.OAuthGrant
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -292,7 +292,7 @@ func (s *Store) RotateOAuthRefresh(
 	if err != nil {
 		return g, err
 	}
-	if g.ClientID != clientID {
+	if g.ClientID != clientID || g.Resource != resource {
 		return store.OAuthGrant{}, store.ErrNotFound
 	}
 	err = tx.QueryRowContext(ctx, q(`SELECT used_at, expires_at FROM oauth_tokens WHERE sha256 = ? AND kind = 'refresh'`), sha256).Scan(&used, &expires)
