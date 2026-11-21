@@ -67,6 +67,19 @@ night.</p><script>alert(1)</script><p hidden="">secret</p><div style="display: n
 	}
 }
 
+func TestHTMLTextKeepsHiddenSubtreeClosed(t *testing.T) {
+	doc := `<html><body><div hidden><br></br>Hidden ending <span>nested</span></div><p>Visible</p></body></html>`
+	text, _ := htmlText([]byte(doc))
+	if text != "Visible" {
+		t.Fatalf("hidden subtree: %q", text)
+	}
+	deep := "<div hidden>" + strings.Repeat("<span>", 2000) + strings.Repeat("</br></other>", 2000) + "Hidden</div><p>Visible</p>"
+	text, _ = htmlText([]byte(deep))
+	if text != "Visible" {
+		t.Fatalf("deep hidden subtree: %q", text)
+	}
+}
+
 func TestHTMLTextChecksActualHiddenStyleProperties(t *testing.T) {
 	doc := `<html><body><p style="display:&#9;none">Hidden display</p><p style="visibility: &#10;hidden !important">Hidden visibility</p><p style="--display:none">Visible custom property</p><p style="display:block">Visible text</p></body></html>`
 	text, _ := htmlText([]byte(doc))
