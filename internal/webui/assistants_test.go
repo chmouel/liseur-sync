@@ -162,7 +162,7 @@ func TestOAuthConsentFlow(t *testing.T) {
 	}
 	g, err := st.ExchangeOAuthCode(t.Context(), store.OAuthCodeRedemption{
 		SHA256: auth.HashSecret(loc.Query().Get("code")), ClientID: "lsc_test",
-		RedirectURI: consentRedirect, CodeChallenge: strings.Repeat("A", 43),
+		RedirectURI: consentRedirect, CodeChallenge: strings.Repeat("A", 43), Resource: "https://books.example/mcp",
 		GrantID: "grant-consent",
 	}, time.Now())
 	if err != nil {
@@ -314,7 +314,7 @@ func TestConnectedAssistantsAreTheReadersOwn(t *testing.T) {
 		}
 		if _, err := st.ExchangeOAuthCode(t.Context(), store.OAuthCodeRedemption{
 			SHA256: "code-" + owner, ClientID: "lsc_test", RedirectURI: consentRedirect,
-			CodeChallenge: strings.Repeat("A", 43), GrantID: "grant-" + owner,
+			CodeChallenge: strings.Repeat("A", 43), Resource: "https://books.example/mcp", GrantID: "grant-" + owner,
 			Tokens: []store.OAuthToken{
 				{SHA256: "at-" + owner, Kind: store.OAuthTokenAccess, CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
 				{SHA256: "rt-" + owner, Kind: store.OAuthTokenRefresh, CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)},

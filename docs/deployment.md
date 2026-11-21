@@ -1009,7 +1009,9 @@ and while it is off none of its routes exist.
 `public_url` is the bare `https` origin assistants reach this server at,
 such as `https://books.example.com`. Every token is bound to
 `<public_url>/mcp`, and the issuer is derived from it, never from a
-request's `Host`. Assistants also need these paths at that origin's
+request's `Host`. Changing `public_url` requires assistants to connect
+again; existing codes and tokens remain bound to the previous URL.
+Assistants also need these paths at that origin's
 root, unchanged, along with the web UI they send the reader to:
 
 - `/.well-known/oauth-authorization-server`

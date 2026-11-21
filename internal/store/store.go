@@ -158,8 +158,7 @@ type OAuthCodeRedemption struct {
 	// is the S256 digest of the verifier, so the store never sees it.
 	RedirectURI   string
 	CodeChallenge string
-	// Resource is the RFC 8707 resource the request named. Empty means
-	// it named none and the code's own resource stands.
+	// Resource is the expected audience, including when omitted by the client.
 	Resource string
 	// GrantID and Tokens describe what the redemption should leave
 	// behind; the grant's user, client, scopes and resource come from
@@ -2660,11 +2659,11 @@ type Store interface {
 	// expired, revoked through its grant, or held by a disabled account
 	// is ErrNotFound.
 	OAuthAccess(ctx context.Context, sha256 string, now time.Time) (OAuthAccess, error)
-	// RotateOAuthRefresh spends a refresh token issued to clientID and
+	// RotateOAuthRefresh spends a refresh token issued to clientID and resource and
 	// stores its replacements. A refresh token presented twice is
 	// ErrConflict and revokes the whole grant; anything else that is not
-	// a live refresh token for clientID is ErrNotFound.
-	RotateOAuthRefresh(ctx context.Context, sha256, clientID string, now time.Time, tokens []OAuthToken) (OAuthGrant, error)
+	// a live refresh token for that client and resource is ErrNotFound.
+	RotateOAuthRefresh(ctx context.Context, sha256, clientID, resource string, now time.Time, tokens []OAuthToken) (OAuthGrant, error)
 	// TouchOAuthGrant records use, at most once per OAuthTouchInterval.
 	TouchOAuthGrant(ctx context.Context, grantID string, at time.Time) error
 	// ListOAuthGrants lists one account's grants, or every grant when

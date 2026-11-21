@@ -1513,6 +1513,10 @@ ALTER TABLE oauth_clients ADD COLUMN generation TEXT NOT NULL DEFAULT '';
 UPDATE oauth_clients SET generation = lower(hex(randomblob(16)));
 `
 
+const oauthUnusedTokensIndex = `
+CREATE INDEX oauth_tokens_unused_grant_expiry ON oauth_tokens(grant_id, expires_at) WHERE used_at IS NULL;
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
@@ -1538,6 +1542,7 @@ var migrations = []string{
 	vocabularySync,
 	oauthAssistants,
 	oauthClientGenerations,
+	oauthUnusedTokensIndex,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1572,6 +1577,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"vocabularySync":           vocabularySync,
 		"oauthAssistants":          oauthAssistants,
 		"oauthClientGenerations":   oauthClientGenerations,
+		"oauthUnusedTokensIndex":   oauthUnusedTokensIndex,
 	}
 	want, ok := named[name]
 	if !ok {
