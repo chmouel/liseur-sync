@@ -216,7 +216,10 @@ func TestOAuthConsentRefusesUntrustedRequests(t *testing.T) {
 }
 
 func TestOAuthConsentDisabled(t *testing.T) {
-	ts, _ := testServer(t)
+	ts, st := testServer(t)
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
 	cookie := loginCookie(t, ts)
 	for _, c := range []*http.Cookie{nil, cookie} {
 		if code, _ := page(t, ts, c, "/ui/oauth/authorize?"+authorizeQuery(nil)); code != http.StatusNotFound {
@@ -235,6 +238,10 @@ func TestOAuthConsentDisabled(t *testing.T) {
 	}
 	if _, body := page(t, ts, cookie, "/ui/settings?section=devices&view=assistants"); !strings.Contains(body, "has not turned on") {
 		t.Fatal("assistants page does not say the feature is off")
+	}
+	_, admin := page(t, ts, cookie, "/ui/settings?section=admin&view=assistants")
+	if !strings.Contains(admin, "restart before allowing applications") || strings.Contains(admin, "admin/oauth/") {
+		t.Fatalf("disabled administration: %s", admin)
 	}
 }
 

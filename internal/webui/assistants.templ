@@ -143,7 +143,7 @@ templ adminAssistantsBody(prefix string, csrf string, v adminAssistantsView) {
 	if !v.Enabled {
 		<section class="card">
 			<h2>Assistant endpoint is off</h2>
-			<p>Set <code>enabled = true</code> and <code>public_url</code> in the <code>[mcp]</code> section of the configuration, or <code>LISEUR_MCP_ENABLED=true</code> and <code>LISEUR_MCP_PUBLIC_URL</code>, then restart. Applications added here wait until then.</p>
+			<p>Set <code>enabled = true</code> and <code>public_url</code> in the <code>[mcp]</code> section of the configuration, or <code>LISEUR_MCP_ENABLED=true</code> and <code>LISEUR_MCP_PUBLIC_URL</code>, then restart before allowing applications.</p>
 		</section>
 	} else {
 		<section class="card">
@@ -151,109 +151,109 @@ templ adminAssistantsBody(prefix string, csrf string, v adminAssistantsView) {
 			<p class="muted">Readers add this address to their assistant. Only applications allowed below can ask, and each reader still decides what their own connection may read.</p>
 			@mcpEndpoint(v.MCPURL)
 		</section>
-	}
-	<section class="card">
-		<h2>ChatGPT</h2>
-		<p class="muted">ChatGPT identifies itself with a metadata document published at chatgpt.com. Allowing it lets any reader here connect their own ChatGPT account; it gets nothing until a reader says yes.</p>
-		<form method="post" action={ prefix + "admin/oauth/chatgpt" }>
-			<input type="hidden" name="csrf" value={ csrf }/>
-			if v.ChatGPT {
-				<input type="hidden" name="allow" value="off"/>
-				<p class="ok">ChatGPT is allowed.</p>
-				<button type="submit" class="danger" hx-confirm="Stop allowing ChatGPT? Every reader's ChatGPT connection is cut at once.">Stop allowing ChatGPT</button>
+		<section class="card">
+			<h2>ChatGPT</h2>
+			<p class="muted">ChatGPT identifies itself with a metadata document published at chatgpt.com. Allowing it lets any reader here connect their own ChatGPT account; it gets nothing until a reader says yes.</p>
+			<form method="post" action={ prefix + "admin/oauth/chatgpt" }>
+				<input type="hidden" name="csrf" value={ csrf }/>
+				if v.ChatGPT {
+					<input type="hidden" name="allow" value="off"/>
+					<p class="ok">ChatGPT is allowed.</p>
+					<button type="submit" class="danger" hx-confirm="Stop allowing ChatGPT? Every reader's ChatGPT connection is cut at once.">Stop allowing ChatGPT</button>
+				} else {
+					<input type="hidden" name="allow" value="on"/>
+					<button type="submit" class="primary">Allow ChatGPT</button>
+				}
+			</form>
+		</section>
+		<section class="card">
+			<h2>Other applications</h2>
+			if len(v.Clients) == 0 {
+				<p class="muted">No other application is allowed.</p>
 			} else {
-				<input type="hidden" name="allow" value="on"/>
-				<button type="submit" class="primary">Allow ChatGPT</button>
+				<table>
+					<thead>
+						<tr><th scope="col">Name</th><th scope="col">Client ID</th><th scope="col">Kind</th><th scope="col"></th></tr>
+					</thead>
+					for _, c := range v.Clients {
+						<tr>
+							<td>{ c.Name }</td>
+							<td><code>{ c.ID }</code></td>
+							<td><span class="muted">{ clientKindLabel(c) }</span></td>
+							<td>
+								<form method="post" action={ prefix + "admin/oauth/clients/delete" } hx-confirm={ "Remove " + c.Name + "? Every connection it has is cut." }>
+									<input type="hidden" name="csrf" value={ csrf }/>
+									<input type="hidden" name="client_id" value={ c.ID }/>
+									<button type="submit" class="danger">Remove</button>
+								</form>
+							</td>
+						</tr>
+					}
+				</table>
 			}
-		</form>
-	</section>
-	<section class="card">
-		<h2>Other applications</h2>
-		if len(v.Clients) == 0 {
-			<p class="muted">No other application is allowed.</p>
-		} else {
-			<table>
-				<thead>
-					<tr><th scope="col">Name</th><th scope="col">Client ID</th><th scope="col">Kind</th><th scope="col"></th></tr>
-				</thead>
-				for _, c := range v.Clients {
-					<tr>
-						<td>{ c.Name }</td>
-						<td><code>{ c.ID }</code></td>
-						<td><span class="muted">{ clientKindLabel(c) }</span></td>
-						<td>
-							<form method="post" action={ prefix + "admin/oauth/clients/delete" } hx-confirm={ "Remove " + c.Name + "? Every connection it has is cut." }>
-								<input type="hidden" name="csrf" value={ csrf }/>
-								<input type="hidden" name="client_id" value={ c.ID }/>
-								<button type="submit" class="danger">Remove</button>
-							</form>
-						</td>
-					</tr>
-				}
-			</table>
-		}
-		<details>
-			<summary>Allow an application by its metadata URL</summary>
-			<form method="post" action={ prefix + "admin/oauth/clients" }>
-				<input type="hidden" name="csrf" value={ csrf }/>
-				<input type="hidden" name="kind" value="metadata"/>
-				<p>
-					<label for="oauth-metadata-url">Client ID Metadata Document URL</label>
-					<input id="oauth-metadata-url" name="metadata_url" type="url" required placeholder="https://example.com/oauth/client.json"/>
-					<span class="muted">The exact HTTPS URL the application uses as its client ID. Its redirect URIs are read from that document every time it connects.</span>
-				</p>
-				<p>
-					<label for="oauth-metadata-name">Name (optional)</label>
-					<input id="oauth-metadata-name" name="name" maxlength="80"/>
-				</p>
-				<button type="submit" class="primary">Allow</button>
-			</form>
-		</details>
-		<details>
-			<summary>Register an application by hand</summary>
-			<form method="post" action={ prefix + "admin/oauth/clients" }>
-				<input type="hidden" name="csrf" value={ csrf }/>
-				<input type="hidden" name="kind" value="registered"/>
-				<p>
-					<label for="oauth-client-name">Name</label>
-					<input id="oauth-client-name" name="name" maxlength="80" required/>
-				</p>
-				<p>
-					<label for="oauth-client-redirects">Redirect URIs, one per line</label>
-					<textarea id="oauth-client-redirects" name="redirect_uris" rows="3" required placeholder="https://client.example/callback"></textarea>
-					<span class="muted">HTTPS, or http on 127.0.0.1 or localhost for a desktop application.</span>
-				</p>
-				<label class="check"><input type="checkbox" name="confidential"/> Issue a client secret (for an application that runs on a server)</label>
-				<button type="submit" class="primary">Register</button>
-			</form>
-		</details>
-	</section>
-	<section class="card">
-		<h2>Connections</h2>
-		if len(v.Grants) == 0 {
-			<p class="muted">No reader has connected an assistant.</p>
-		} else {
-			<table>
-				<thead>
-					<tr><th scope="col">Reader</th><th scope="col">Assistant</th><th scope="col">May read</th><th scope="col">Last used</th><th scope="col"></th></tr>
-				</thead>
-				for _, g := range v.Grants {
-					<tr>
-						<td>{ g.UserName }</td>
-						<td>{ g.ClientName }</td>
-						<td>{ scopeTitles(g.Scopes) }</td>
-						<td><span class="muted">{ grantLastUsed(g) }</span></td>
-						<td>
-							<form method="post" action={ prefix + "admin/oauth/grants/" + g.ID + "/revoke" } hx-confirm={ "Cut " + g.UserName + "'s connection to " + g.ClientName + "?" }>
-								<input type="hidden" name="csrf" value={ csrf }/>
-								<button type="submit" class="danger">Cut</button>
-							</form>
-						</td>
-					</tr>
-				}
-			</table>
-		}
-	</section>
+			<details>
+				<summary>Allow an application by its metadata URL</summary>
+				<form method="post" action={ prefix + "admin/oauth/clients" }>
+					<input type="hidden" name="csrf" value={ csrf }/>
+					<input type="hidden" name="kind" value="metadata"/>
+					<p>
+						<label for="oauth-metadata-url">Client ID Metadata Document URL</label>
+						<input id="oauth-metadata-url" name="metadata_url" type="url" required placeholder="https://example.com/oauth/client.json"/>
+						<span class="muted">The exact HTTPS URL the application uses as its client ID. Its redirect URIs are read from that document every time it connects.</span>
+					</p>
+					<p>
+						<label for="oauth-metadata-name">Name (optional)</label>
+						<input id="oauth-metadata-name" name="name" maxlength="80"/>
+					</p>
+					<button type="submit" class="primary">Allow</button>
+				</form>
+			</details>
+			<details>
+				<summary>Register an application by hand</summary>
+				<form method="post" action={ prefix + "admin/oauth/clients" }>
+					<input type="hidden" name="csrf" value={ csrf }/>
+					<input type="hidden" name="kind" value="registered"/>
+					<p>
+						<label for="oauth-client-name">Name</label>
+						<input id="oauth-client-name" name="name" maxlength="80" required/>
+					</p>
+					<p>
+						<label for="oauth-client-redirects">Redirect URIs, one per line</label>
+						<textarea id="oauth-client-redirects" name="redirect_uris" rows="3" required placeholder="https://client.example/callback"></textarea>
+						<span class="muted">HTTPS, or http on 127.0.0.1 or localhost for a desktop application.</span>
+					</p>
+					<label class="check"><input type="checkbox" name="confidential"/> Issue a client secret (for an application that runs on a server)</label>
+					<button type="submit" class="primary">Register</button>
+				</form>
+			</details>
+		</section>
+		<section class="card">
+			<h2>Connections</h2>
+			if len(v.Grants) == 0 {
+				<p class="muted">No reader has connected an assistant.</p>
+			} else {
+				<table>
+					<thead>
+						<tr><th scope="col">Reader</th><th scope="col">Assistant</th><th scope="col">May read</th><th scope="col">Last used</th><th scope="col"></th></tr>
+					</thead>
+					for _, g := range v.Grants {
+						<tr>
+							<td>{ g.UserName }</td>
+							<td>{ g.ClientName }</td>
+							<td>{ scopeTitles(g.Scopes) }</td>
+							<td><span class="muted">{ grantLastUsed(g) }</span></td>
+							<td>
+								<form method="post" action={ prefix + "admin/oauth/grants/" + g.ID + "/revoke" } hx-confirm={ "Cut " + g.UserName + "'s connection to " + g.ClientName + "?" }>
+									<input type="hidden" name="csrf" value={ csrf }/>
+									<button type="submit" class="danger">Cut</button>
+								</form>
+							</td>
+						</tr>
+					}
+				</table>
+			}
+		</section>
+	}
 }
 
 func clientKindLabel(c store.OAuthClient) string {
