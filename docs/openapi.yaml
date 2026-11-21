@@ -446,7 +446,7 @@ paths:
       parameters:
         - name: MCP-Protocol-Version
           in: header
-          schema: { type: string, enum: ["2025-11-25", "2025-06-18", "2025-03-26"] }
+          schema: { type: string, enum: ["2025-11-25", "2025-06-18"] }
       requestBody:
         required: true
         content:
