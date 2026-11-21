@@ -550,6 +550,31 @@ func TestMCPReadsAroundTheReadersOwnPlaces(t *testing.T) {
 	}
 }
 
+func TestMCPAnnotationsDoNotExposeLocatorPaths(t *testing.T) {
+	f := newFolderFixture(t)
+	f.enableMCP(t, nil)
+	bookID, sha := f.writeBook(t, "moby.epub", chapterEPUB(t))
+	_, resolved := f.resolveBook(t, bookID, f.token)
+	var annotations []map[string]any
+	for i, href := range []string{"OEBPS/chapter1.xhtml", "/home/user/private.epub", "https://example.com/file?token=secret"} {
+		annotations = append(annotations, map[string]any{"id": fmt.Sprintf("h%d", i), "base_rev": 0, "work_id": resolved.WorkID, "edition_sha": sha, "kind": "highlight", "locator": map[string]any{"href": href}, "client_ts": "2025-06-01T10:00:00Z"})
+	}
+	if code, out := post(t, f.ts.URL+"/v1/annotations", f.token, map[string]any{"annotations": annotations}); code != http.StatusOK {
+		t.Fatalf("annotation push: %d %v", code, out)
+	}
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeReading)
+	out := f.mustCall(t, access, "list_annotations", map[string]any{"work_id": resolved.WorkID})
+	list := out["annotations"].([]any)
+	if len(list) != len(annotations) {
+		t.Fatalf("annotations: %v", out)
+	}
+	for _, item := range list {
+		if _, ok := item.(map[string]any)["href"]; ok {
+			t.Fatalf("locator path exposed: %v", item)
+		}
+	}
+}
+
 func TestMCPReadAtBounds(t *testing.T) {
 	f := newFolderFixture(t)
 	f.enableMCP(t, nil)

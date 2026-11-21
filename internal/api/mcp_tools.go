@@ -608,18 +608,6 @@ func (m *mcpService) listCurrentlyReading(ctx context.Context, raw json.RawMessa
 	return map[string]any{"works": out}, nil
 }
 
-// locatorHref reads the resource a stored locator names, for a model
-// that wants to know which chapter an annotation is in.
-func locatorHref(raw []byte) string {
-	var l struct {
-		Href string `json:"href"`
-	}
-	if json.Unmarshal(raw, &l) != nil {
-		return ""
-	}
-	return l.Href
-}
-
 func offsetCursor(raw string) (int, error) {
 	if raw == "" {
 		return 0, nil
@@ -688,9 +676,6 @@ func (m *mcpService) listAnnotations(ctx context.Context, raw json.RawMessage) (
 		}
 		if a.Progression != nil {
 			entry["progression"] = *a.Progression
-		}
-		if href := locatorHref(a.LocatorJSON); href != "" {
-			entry["href"] = href
 		}
 		out = append(out, entry)
 	}
