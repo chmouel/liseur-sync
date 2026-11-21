@@ -25,6 +25,8 @@ import (
 // past it is cut off there, which the result reports.
 const MaxBookBytes = 24 << 20
 
+const MaxTitleBytes = 256
+
 // ErrNoText is returned for a publication with no readable text, such
 // as a comic or a fixed-layout book made of images.
 var ErrNoText = errors.New("the book has no readable text")
@@ -131,7 +133,7 @@ func tocTitles(list manifest.LinkList) map[string]string {
 		for _, link := range l {
 			if name, ok := archivePath(link.Href.String()); ok {
 				if _, seen := out[name]; !seen {
-					if t := collapse(link.Title); t != "" {
+					if t := boundedTitle(link.Title); t != "" {
 						out[name] = t
 					}
 				}
@@ -167,6 +169,30 @@ func progressionSpans(positions []manifest.Locator) map[string][2]float64 {
 }
 
 func collapse(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+func boundedTitle(s string) string {
+	var out strings.Builder
+	space := false
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			space = out.Len() > 0
+			continue
+		}
+		needed := utf8.RuneLen(r)
+		if space {
+			needed++
+		}
+		if out.Len()+needed > MaxTitleBytes {
+			break
+		}
+		if space {
+			out.WriteByte(' ')
+		}
+		out.WriteRune(r)
+		space = false
+	}
+	return out.String()
+}
 
 var blockTags = map[string]bool{
 	"address": true, "article": true, "aside": true, "blockquote": true, "br": true,
@@ -209,7 +235,7 @@ func htmlText(doc []byte) (string, string) {
 		tt := z.Next()
 		switch tt {
 		case html.ErrorToken:
-			return strings.TrimSpace(w.b.String()), collapse(heading.String())
+			return strings.TrimSpace(w.b.String()), boundedTitle(heading.String())
 		case html.StartTagToken, html.SelfClosingTagToken:
 			name, hasAttr := z.TagName()
 			tag := localName(name)
@@ -259,9 +285,12 @@ func htmlText(doc []byte) (string, string) {
 			}
 			t := string(z.Text())
 			w.text(t)
-			if inHeading > 0 && heading.Len() < 200 {
-				heading.WriteString(t)
-				heading.WriteByte(' ')
+			if inHeading > 0 && heading.Len() < MaxTitleBytes {
+				end := snapBack(t, min(len(t), MaxTitleBytes-heading.Len()))
+				heading.WriteString(t[:end])
+				if heading.Len() < MaxTitleBytes {
+					heading.WriteByte(' ')
+				}
 			}
 		}
 	}

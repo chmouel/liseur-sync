@@ -3,6 +3,7 @@ package booktext
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestHTMLText(t *testing.T) {
@@ -17,6 +18,19 @@ night.</p><script>alert(1)</script><p hidden="">secret</p><div style="display: n
 	}
 	if heading != "Chapter One" {
 		t.Fatalf("heading = %q", heading)
+	}
+}
+
+func TestChapterTitleBounds(t *testing.T) {
+	long := strings.Repeat("é", MaxTitleBytes)
+	_, heading := htmlText([]byte("<html><body><h1>" + long + "</h1></body></html>"))
+	for _, title := range []string{heading, boundedTitle(long), boundedTitle("  one  two  ")} {
+		if len(title) > MaxTitleBytes || !utf8.ValidString(title) {
+			t.Fatalf("unbounded or invalid title: %q", title)
+		}
+	}
+	if heading != strings.Repeat("é", MaxTitleBytes/2) || boundedTitle("  one  two  ") != "one two" {
+		t.Fatalf("unexpected bounded heading: %q", heading)
 	}
 }
 
