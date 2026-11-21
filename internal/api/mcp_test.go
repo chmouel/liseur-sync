@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -535,6 +537,42 @@ func TestMCPBookTextIsBudgeted(t *testing.T) {
 	// The budget belongs to the grant, so a second connection starts afresh.
 	fresh := f.assistantToken(t, f.user.ID)
 	f.mustCall(t, fresh, "read_chapter", map[string]any{"book_id": bookID, "chapter": ch})
+}
+
+func TestMCPCachedTextRequiresAvailableFile(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(string) error
+	}{
+		{"removed", os.Remove},
+		{"replaced", func(path string) error { return os.WriteFile(path, []byte("changed"), 0600) }},
+		{"symlink", func(path string) error {
+			if err := os.Rename(path, path+".saved"); err != nil {
+				return err
+			}
+			return os.Symlink(path+".saved", path)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFolderFixture(t)
+			f.enableMCP(t, nil)
+			bookID, _ := f.writeBook(t, "moby.epub", chapterEPUB(t))
+			access := f.assistantToken(t, f.user.ID, oauth.ScopeText)
+			chapter := f.chapterIndex(t, access, bookID, "Loomings")
+			if err := tc.change(filepath.Join(f.root, "moby.epub")); err != nil {
+				t.Fatal(err)
+			}
+			for _, tool := range []string{"list_chapters", "read_chapter"} {
+				args := map[string]any{"book_id": bookID}
+				if tool == "read_chapter" {
+					args["chapter"] = chapter
+				}
+				if _, errText := f.call(t, access, tool, args); !strings.Contains(errText, "not available") {
+					t.Errorf("%s after file %s: %q", tool, tc.name, errText)
+				}
+			}
+		})
+	}
 }
 
 func TestMCPConcurrentBookTextBudget(t *testing.T) {
