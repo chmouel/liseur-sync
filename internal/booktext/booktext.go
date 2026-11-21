@@ -268,6 +268,9 @@ func htmlText(doc []byte) (string, string) {
 			if blockTags[tag] {
 				w.newline()
 			}
+			if tag == "br" && inHeading > 0 && heading.Len() < MaxTitleBytes {
+				heading.WriteByte(' ')
+			}
 			if !opens {
 				continue
 			}
@@ -301,9 +304,6 @@ func htmlText(doc []byte) (string, string) {
 			if inHeading > 0 && heading.Len() < MaxTitleBytes {
 				end := snapBack(t, min(len(t), MaxTitleBytes-heading.Len()))
 				heading.WriteString(t[:end])
-				if heading.Len() < MaxTitleBytes {
-					heading.WriteByte(' ')
-				}
 			}
 		}
 	}

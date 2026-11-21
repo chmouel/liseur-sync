@@ -125,9 +125,25 @@ func snapForward(s string, i int) int {
 func (c *Chapter) FirstSentence(maxBytes int) string {
 	t := c.Text
 	if c.Title != "" {
-		// The heading is usually the chapter's first line; skip it.
-		if line, rest, ok := strings.Cut(t, "\n"); ok && strings.EqualFold(collapse(line), c.Title) {
-			t = rest
+		var heading strings.Builder
+		rest := t
+		for {
+			line, next, ok := strings.Cut(rest, "\n")
+			if !ok {
+				break
+			}
+			if heading.Len() > 0 {
+				heading.WriteByte(' ')
+			}
+			heading.WriteString(collapse(line))
+			if strings.EqualFold(heading.String(), c.Title) {
+				t = next
+				break
+			}
+			if utf8.RuneCountInString(heading.String()) >= utf8.RuneCountInString(c.Title) {
+				break
+			}
+			rest = next
 		}
 	}
 	end := len(t)
