@@ -592,6 +592,27 @@ func TestMCPReadAtRejectsTruncatedPosition(t *testing.T) {
 	}
 }
 
+func TestMCPSearchReportsTruncatedBook(t *testing.T) {
+	f := newFolderFixture(t)
+	f.srv.BookTexts = NewBookTextCache(0)
+	bookID, sha := f.writeBook(t, "moby.epub", chapterEPUB(t))
+	f.srv.BookTexts.put(sha, &booktext.Book{Truncated: true, Chapters: []booktext.Chapter{{Href: "one.xhtml", Text: "Mary Jane is here", StartProg: 0, EndProg: 0.4}}})
+	f.enableMCP(t, nil)
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeText)
+	search := f.mustCall(t, access, "search_text", map[string]any{"book_id": bookID, "query": "Mary"})
+	if search["book_truncated"] != true || search["more"] != false {
+		t.Fatalf("search: %v", search)
+	}
+	mentions := f.mustCall(t, access, "find_mentions", map[string]any{"book_id": bookID, "names": []string{"Mary"}})
+	if mentions["book_truncated"] != true || mentions["counts_truncated"] != true {
+		t.Fatalf("mentions: %v", mentions)
+	}
+	bounded := f.mustCall(t, access, "find_mentions", map[string]any{"book_id": bookID, "names": []string{"Mary"}, "up_to_progression": 0.2})
+	if bounded["book_truncated"] != true || bounded["counts_truncated"] != nil {
+		t.Fatalf("bounded mentions: %v", bounded)
+	}
+}
+
 func TestMCPTruncatedUnknownProgressionIsOmitted(t *testing.T) {
 	href := func(name string) manifest.HREF { return manifest.NewHREF(readiumurl.MustURLFromString(name)) }
 	idx := &epub.Index{Entries: map[string]epub.IndexEntry{"one.xhtml": {}, "two.xhtml": {}}}

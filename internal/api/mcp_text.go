@@ -74,7 +74,7 @@ func (m *mcpService) textTools() []mcp.Tool {
 		},
 		{
 			Name: "search_text", Title: "Search a book's text", Scope: oauth.ScopeText,
-			Description: "Find a phrase in a book, ignoring case and accents. Returns short snippets with the chapter and progression of each, to pass on to read_at.",
+			Description: "Find a phrase in a book, ignoring case and accents. Returns short snippets with the chapter and, when known, progression of each. book_truncated indicates that later chapters were not searched.",
 			InputSchema: objectSchema(map[string]any{
 				"book_id": bookID,
 				"query":   strProp("Text to find.", 200),
@@ -84,7 +84,7 @@ func (m *mcpService) textTools() []mcp.Tool {
 		},
 		{
 			Name: "find_mentions", Title: "Follow a character or place through a book", Scope: oauth.ScopeText,
-			Description: "Every place a name occurs in a book, in reading order, with the text around it. Give a name and its other forms together (for example [\"Raskolnikov\", \"Rodya\", \"Rodion Romanovich\"]); they count as one. Matches whole words, ignoring case and accents. Also returns counts per chapter and the first and last occurrence. up_to_current (needs reading access) or up_to_progression stop the search at a place, to keep to what the reader has already read.",
+			Description: "Every place a name occurs in a book, in reading order, with the text around it. Give a name and its other forms together (for example [\"Raskolnikov\", \"Rodya\", \"Rodion Romanovich\"]); they count as one. Matches whole words, ignoring case and accents. Also returns counts per chapter and the first and last occurrence. up_to_current (needs reading access) or up_to_progression stop the search at a place, to keep to what the reader has already read. book_truncated indicates missing later chapters; counts_truncated indicates incomplete counts.",
 			InputSchema: objectSchema(map[string]any{
 				"book_id":           bookID,
 				"names":             map[string]any{"type": "array", "description": "A name and its other forms.", "items": strProp("A name.", maxNameBytes), "minItems": 1, "maxItems": maxMentionNames},
@@ -633,7 +633,11 @@ func (m *mcpService) searchText(ctx context.Context, raw json.RawMessage) (any, 
 	if err := m.charge(ctx, used); err != nil {
 		return nil, err
 	}
-	return map[string]any{"book_id": b.ID, "results": results, "more": more, "content_notice": textNotice}, nil
+	out := map[string]any{"book_id": b.ID, "results": results, "more": more, "content_notice": textNotice}
+	if t.Truncated {
+		out["book_truncated"] = true
+	}
+	return out, nil
 }
 
 func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -735,8 +739,11 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 	out["total"] = len(hits)
 	out["by_name"] = byName
 	out["by_chapter"] = perChapter
-	if capped {
+	if capped || (t.Truncated && stop == nil) {
 		out["counts_truncated"] = true
+	}
+	if t.Truncated {
+		out["book_truncated"] = true
 	}
 	if len(hits) > 0 {
 		at := func(h booktext.Hit) map[string]any {

@@ -225,7 +225,7 @@ func (m *mcpService) tools() []mcp.Tool {
 		},
 		{
 			Name: "list_vocabulary", Title: "List vocabulary", Scope: oauth.ScopeVocabulary,
-			Description: "Words the reader saved while reading, with definitions, notes and the sentences they met them in.",
+			Description: "Words the reader saved while reading, with definitions, notes and the sentences they met them in. Follow next_cursor even if a page has no matching words.",
 			InputSchema: objectSchema(map[string]any{
 				"work_id":  strProp("Only words met in this work.", maxIDLen),
 				"language": strProp("Only words in this language (BCP 47 tag).", 35),
@@ -893,11 +893,12 @@ func (m *mcpService) listVocabulary(ctx context.Context, raw json.RawMessage) (a
 	}
 	userID := mcpUser(ctx)
 	out := []map[string]any{}
-	for pages := 0; pages < 32 && len(out) < limit; pages++ {
-		page, err := m.s.St.VocabularyChanges(ctx, userID, since, limit-len(out), 1<<20)
+	for pages, scanned := 0, 0; pages < 32 && scanned < 500 && len(out) < limit; pages++ {
+		page, err := m.s.St.VocabularyChanges(ctx, userID, since, min(limit-len(out), 500-scanned), 1<<20)
 		if err != nil {
 			return nil, err
 		}
+		scanned += len(page.Words) + len(page.Reviews)
 		for _, w := range page.Words {
 			if w.Deleted() || (in.Language != "" && !strings.EqualFold(w.Language, in.Language)) {
 				continue

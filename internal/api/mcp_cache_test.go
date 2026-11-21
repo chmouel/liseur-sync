@@ -1,10 +1,13 @@
 package api
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/chmouel/liseur-sync/internal/booktext"
 )
 
 func TestConcurrentTextBudgetCharge(t *testing.T) {
@@ -43,5 +46,24 @@ func TestConcurrentTextBudgetCharge(t *testing.T) {
 	}
 	if left, _ := budget.remaining("grant", now.Add(time.Hour)); left != 2500 {
 		t.Fatalf("renewed allowance: %d", left)
+	}
+}
+
+func TestBookTextCacheCountsChapterMetadata(t *testing.T) {
+	cache := NewBookTextCache(2048)
+	book := &booktext.Book{Chapters: make([]booktext.Chapter, 12)}
+	for i := range book.Chapters {
+		book.Chapters[i] = booktext.Chapter{Href: strings.Repeat("h", 40), Title: strings.Repeat("t", 40)}
+	}
+	cache.put("first", book)
+	if _, ok := cache.get("first"); !ok {
+		t.Fatal("first book not cached")
+	}
+	cache.put("second", book)
+	if _, ok := cache.get("first"); ok {
+		t.Fatal("metadata-heavy book was not evicted")
+	}
+	if _, ok := cache.get("second"); !ok {
+		t.Fatal("second book not cached")
 	}
 }
