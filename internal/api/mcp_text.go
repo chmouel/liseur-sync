@@ -124,8 +124,12 @@ func (m *mcpService) bookText(ctx context.Context, userID, bookID string) (store
 	if err != nil {
 		return b, nil, mcp.Errorf("this book has no readable EPUB text")
 	}
+	archive, err := epub.OpenIndexedArchive(f, size, idx)
+	if err != nil {
+		return b, nil, mcp.Errorf("this book has no readable EPUB text")
+	}
 	read := func(name string) ([]byte, error) {
-		rc, n, err := epub.OpenIndexedResource(f, size, idx, name)
+		rc, n, err := archive.OpenResource(name)
 		if err != nil {
 			return nil, err
 		}

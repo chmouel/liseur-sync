@@ -3,6 +3,7 @@ package epub
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -97,6 +98,61 @@ func TestPublicationResourcesAreBoundedAndDeclared(t *testing.T) {
 	limits.MaxEntryBytes = 1 << 20
 	if _, err := OpenPublication(t.Context(), bytes.NewReader(data), int64(len(data)), limits); err == nil {
 		t.Fatal("oversized entry accepted")
+	}
+}
+
+type directoryReadCounter struct {
+	*bytes.Reader
+	tailStart int64
+	reads     int
+}
+
+func (r *directoryReadCounter) ReadAt(p []byte, off int64) (int, error) {
+	if off >= r.tailStart {
+		r.reads++
+	}
+	return r.Reader.ReadAt(p, off)
+}
+
+func TestIndexedArchiveReusesDirectoryAndChecksEntries(t *testing.T) {
+	data := readerArchive(t, readerPackage)
+	pub, err := OpenPublication(t.Context(), bytes.NewReader(data), int64(len(data)), DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pub.Close()
+	idx := pub.Index(t.Context(), 100)
+	source := &directoryReadCounter{Reader: bytes.NewReader(data), tailStart: int64(len(data) - (128 << 10))}
+	archive, err := OpenIndexedArchive(source, int64(len(data)), idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directoryReads := source.reads
+	if directoryReads == 0 {
+		t.Fatal("ZIP directory was not read")
+	}
+	for _, name := range []string{"OPS/one.xhtml", "OPS/two.xhtml"} {
+		r, _, err := archive.OpenResource(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, err := io.ReadAll(r)
+		r.Close()
+		if err != nil || !bytes.Contains(text, []byte("chapter")) {
+			t.Fatalf("%s: %q %v", name, text, err)
+		}
+	}
+	if source.reads != directoryReads {
+		t.Fatalf("reading chapters reopened the ZIP directory %d times", source.reads-directoryReads)
+	}
+	entry := idx.Entries["OPS/two.xhtml"]
+	entry.Offset++
+	idx.Entries["OPS/two.xhtml"] = entry
+	if _, _, err := archive.OpenResource("OPS/two.xhtml"); !errors.Is(err, ErrPublicationChanged) {
+		t.Fatalf("changed entry: %v", err)
+	}
+	if _, _, err := archive.OpenResource("private.txt"); err == nil {
+		t.Fatal("undeclared entry was readable")
 	}
 }
 

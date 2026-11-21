@@ -575,6 +575,31 @@ func TestMCPCachedTextRequiresAvailableFile(t *testing.T) {
 	}
 }
 
+func TestMCPTextRejectsStalePublicationIndex(t *testing.T) {
+	f := newFolderFixture(t)
+	f.srv.PublicationIndexes = NewPublicationIndexCache(0)
+	f.enableMCP(t, nil)
+	bookID, digest := f.writeBook(t, "moby.epub", chapterEPUB(t))
+	if resp, body := f.get(t, "/v1/books/"+bookID+"/publication/manifest.json", f.token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("manifest: %d %s", resp.StatusCode, body)
+	}
+	idx, ok := f.srv.PublicationIndexes.Get(digest)
+	if !ok {
+		t.Fatal("publication index was not cached")
+	}
+	entry := idx.Entries["OEBPS/chapter1.xhtml"]
+	entry.Offset++
+	idx.Entries["OEBPS/chapter1.xhtml"] = entry
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeText)
+	if _, errText := f.call(t, access, "list_chapters", map[string]any{"book_id": bookID}); !strings.Contains(errText, "file changed") {
+		t.Fatalf("stale index: %q", errText)
+	}
+	if _, ok := f.srv.PublicationIndexes.Get(digest); ok {
+		t.Fatal("stale index was not evicted")
+	}
+	f.mustCall(t, access, "list_chapters", map[string]any{"book_id": bookID})
+}
+
 func TestMCPConcurrentBookTextBudget(t *testing.T) {
 	f := newFolderFixture(t)
 	f.enableMCP(t, func(c *config.MCPConfig) {

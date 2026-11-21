@@ -447,13 +447,60 @@ func (p *Publication) estimatedPositionCount() int {
 // this file.
 var ErrPublicationChanged = errors.New("publication changed since it was indexed")
 
-// OpenIndexedResource opens one archive entry using a cached Index instead
-// of a full OpenPublication: it reopens the ZIP directory (unavoidable,
-// since source may be a fresh file handle) but skips preflightZIP, control
-// document validation and the toolkit parser entirely. The entry's offset,
-// sizes and compression method must match the index exactly, or this
-// returns ErrPublicationChanged rather than serving bytes the index did
-// not describe.
+// IndexedArchive reuses a ZIP directory while checking resources against
+// a cached index.
+type IndexedArchive struct {
+	index *Index
+	files map[string]*zip.File
+}
+
+func OpenIndexedArchive(source io.ReaderAt, size int64, idx *Index) (*IndexedArchive, error) {
+	z, err := zip.NewReader(source, size)
+	if err != nil {
+		return nil, validationError(CodeInvalidEPUB, err)
+	}
+	a := &IndexedArchive{index: idx, files: make(map[string]*zip.File, len(idx.Entries))}
+	for _, f := range z.File {
+		name, err := safeArchivePath(f.Name)
+		if err != nil || !idx.HasResource(name) {
+			continue
+		}
+		if _, exists := a.files[name]; !exists {
+			a.files[name] = f
+		}
+	}
+	return a, nil
+}
+
+func (a *IndexedArchive) OpenResource(name string) (io.ReadCloser, int64, error) {
+	entry, ok := a.index.Entries[name]
+	if !ok {
+		return nil, 0, errors.New("publication resource not found")
+	}
+	f := a.files[name]
+	if f == nil {
+		return nil, 0, ErrPublicationChanged
+	}
+	return openIndexedFile(f, entry, a.index, name)
+}
+
+func openIndexedFile(f *zip.File, entry IndexEntry, idx *Index, name string) (io.ReadCloser, int64, error) {
+	offset, err := f.DataOffset()
+	if err != nil || offset != entry.Offset || f.CompressedSize64 != entry.CompressedSize ||
+		f.UncompressedSize64 != entry.UncompressedSize || f.Method != entry.Method {
+		return nil, 0, ErrPublicationChanged
+	}
+	r, err := f.Open()
+	if err != nil {
+		return nil, 0, validationError(CodeInvalidEPUB, err)
+	}
+	if algorithm, ok := idx.FontObfuscation[name]; ok {
+		r = newDeobfuscatingReader(r, idx.Manifest.Metadata, algorithm)
+	}
+	return r, int64(f.UncompressedSize64), nil
+}
+
+// OpenIndexedResource checks one entry against a cached index.
 func OpenIndexedResource(source io.ReaderAt, size int64, idx *Index, name string) (io.ReadCloser, int64, error) {
 	entry, ok := idx.Entries[name]
 	if !ok {
@@ -465,22 +512,9 @@ func OpenIndexedResource(source io.ReaderAt, size int64, idx *Index, name string
 	}
 	for _, f := range z.File {
 		archiveName, err := safeArchivePath(f.Name)
-		if err != nil || archiveName != name {
-			continue
+		if err == nil && archiveName == name {
+			return openIndexedFile(f, entry, idx, name)
 		}
-		offset, err := f.DataOffset()
-		if err != nil || offset != entry.Offset || f.CompressedSize64 != entry.CompressedSize ||
-			f.UncompressedSize64 != entry.UncompressedSize || f.Method != entry.Method {
-			return nil, 0, ErrPublicationChanged
-		}
-		r, err := f.Open()
-		if err != nil {
-			return nil, 0, validationError(CodeInvalidEPUB, err)
-		}
-		if algorithm, ok := idx.FontObfuscation[name]; ok {
-			r = newDeobfuscatingReader(r, idx.Manifest.Metadata, algorithm)
-		}
-		return r, int64(f.UncompressedSize64), nil
 	}
 	return nil, 0, ErrPublicationChanged
 }
