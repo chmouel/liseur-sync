@@ -1,0 +1,267 @@
+package webui
+
+import "strings"
+import "github.com/chmouel/liseur-sync/internal/store"
+
+templ consentPage(prefix string, u userCtx, csrf string, v consentView) {
+	@layout("Connect "+v.Request.Client.Name, prefix, u, csrf, consentBody(prefix, csrf, v))
+}
+
+templ consentBody(prefix string, csrf string, v consentView) {
+	@authFrame(prefix) {
+		<h1>Connect { v.Request.Client.Name }?</h1>
+		<p class="auth-intro">
+			{ v.Request.Client.Name } is asking to read from the account <b>{ v.Account }</b>. It can only read. It cannot change, upload or delete anything.
+		</p>
+		<dl class="consent-facts">
+			if host := v.Request.Client.Host(); host != "" {
+				<dt>Application</dt>
+				<dd>Identified by <code>{ host }</code></dd>
+			} else {
+				<dt>Application</dt>
+				<dd>Registered on this server by an administrator</dd>
+			}
+			<dt>Sends you back to</dt>
+			<dd><code>{ v.Request.RedirectHost() }</code></dd>
+		</dl>
+		<form class="auth-form consent-form" method="post" action="authorize">
+			<input type="hidden" name="csrf" value={ csrf }/>
+			for _, f := range v.Fields {
+				<input type="hidden" name={ f.Name } value={ f.Value }/>
+			}
+			<fieldset class="consent-scopes">
+				<legend>It may read</legend>
+				for _, sc := range v.Scopes {
+					<label class="check consent-scope">
+						<input type="checkbox" name="grant" value={ sc.Name } checked/>
+						<span>
+							<b>{ sc.Title }</b>
+							<span class="auth-hint">{ sc.Description }</span>
+						</span>
+					</label>
+				}
+			</fieldset>
+			<p class="auth-hint">You can disconnect it at any time under Settings, Devices &amp; integrations, AI assistants.</p>
+			<div class="consent-actions">
+				<button type="submit" name="decision" value="deny">Cancel</button>
+				<button type="submit" name="decision" value="allow" class="auth-submit">Allow <span aria-hidden="true">→</span></button>
+			</div>
+		</form>
+	}
+}
+
+templ oauthContinuePage(prefix string, u userCtx, self string, client string) {
+	@layout("Connect "+client, prefix, u, "", oauthContinueBody(prefix, self, client))
+}
+
+templ oauthContinueBody(prefix string, self string, client string) {
+	@authFrame(prefix) {
+		<h1>Connect { client }</h1>
+		<p class="auth-intro">{ client } sent you here to ask for access to your books. Continue to sign in, or to confirm if you already are.</p>
+		<p><a class="btn primary" href={ templ.SafeURL(self) }>Continue</a></p>
+	}
+}
+
+templ oauthErrorPage(prefix string, u userCtx, msg string) {
+	@layout("Cannot connect", prefix, u, "", oauthErrorBody(prefix, msg))
+}
+
+templ oauthErrorBody(prefix string, msg string) {
+	@authFrame(prefix) {
+		<h1>This connection cannot continue</h1>
+		<p class="error" role="alert">{ msg }</p>
+		<p class="muted">Nothing was shared. If you expected this to work, ask the administrator of this server whether the application is allowed.</p>
+	}
+}
+
+func scopeTitles(names []string) string {
+	titles := make([]string, 0, len(names))
+	for _, n := range names {
+		titles = append(titles, scopeTitle(n))
+	}
+	return strings.Join(titles, ", ")
+}
+
+templ mcpEndpoint(url string) {
+	<p class="secret-row">
+		<code id="mcp-endpoint">{ url }</code>
+		<button type="button" class="copy-btn" data-copy-for="mcp-endpoint">Copy</button>
+	</p>
+}
+
+templ assistantsBody(prefix string, csrf string, v assistantsView) {
+	<p class="muted">Assistants such as ChatGPT can read your library, your reading and the text of your books, if you allow them. They never get your password and can never change anything.</p>
+	if !v.Enabled {
+		<section class="card">
+			<h2>Not available</h2>
+			<p class="muted">The administrator has not turned on the assistant endpoint on this server.</p>
+		</section>
+	} else {
+		<section class="card">
+			<h2>Connect an assistant</h2>
+			<p>Add this address as a connector (also called an MCP server) in your assistant. It will send you back here to sign in and choose what it may read.</p>
+			@mcpEndpoint(v.MCPURL)
+			<p><a href="https://chmouel.github.io/liseur-sync/assistants/" target="_blank" rel="noopener">How to connect ChatGPT and other assistants</a></p>
+		</section>
+		<section class="card">
+			<h2>Connected assistants</h2>
+			if len(v.Grants) == 0 {
+				<p class="muted">No assistant is connected.</p>
+			} else {
+				<table>
+					<thead>
+						<tr><th scope="col">Assistant</th><th scope="col">May read</th><th scope="col">Connected</th><th scope="col">Last used</th><th scope="col"></th></tr>
+					</thead>
+					for _, g := range v.Grants {
+						<tr>
+							<td>{ g.ClientName }</td>
+							<td>{ scopeTitles(g.Scopes) }</td>
+							<td><span class="muted">{ g.CreatedAt.Format("2006-01-02") }</span></td>
+							<td><span class="muted">{ grantLastUsed(g) }</span></td>
+							<td>
+								<form method="post" action={ prefix + "oauth/grants/" + g.ID + "/revoke" } hx-confirm={ "Disconnect " + g.ClientName + "? It loses access at once." }>
+									<input type="hidden" name="csrf" value={ csrf }/>
+									<button type="submit" class="danger">Disconnect</button>
+								</form>
+							</td>
+						</tr>
+					}
+				</table>
+			}
+		</section>
+	}
+}
+
+func grantLastUsed(g store.OAuthGrant) string {
+	if g.LastUsedAt == nil {
+		return "never"
+	}
+	return g.LastUsedAt.Format("2006-01-02 15:04")
+}
+
+templ adminAssistantsBody(prefix string, csrf string, v adminAssistantsView) {
+	if !v.Enabled {
+		<section class="card">
+			<h2>Assistant endpoint is off</h2>
+			<p>Set <code>enabled = true</code> and <code>public_url</code> in the <code>[mcp]</code> section of the configuration, or <code>LISEUR_MCP_ENABLED=true</code> and <code>LISEUR_MCP_PUBLIC_URL</code>, then restart. Applications added here wait until then.</p>
+		</section>
+	} else {
+		<section class="card">
+			<h2>Endpoint</h2>
+			<p class="muted">Readers add this address to their assistant. Only applications allowed below can ask, and each reader still decides what their own connection may read.</p>
+			@mcpEndpoint(v.MCPURL)
+		</section>
+	}
+	<section class="card">
+		<h2>ChatGPT</h2>
+		<p class="muted">ChatGPT identifies itself with a metadata document published at chatgpt.com. Allowing it lets any reader here connect their own ChatGPT account; it gets nothing until a reader says yes.</p>
+		<form method="post" action={ prefix + "admin/oauth/chatgpt" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			if v.ChatGPT {
+				<input type="hidden" name="allow" value="off"/>
+				<p class="ok">ChatGPT is allowed.</p>
+				<button type="submit" class="danger" hx-confirm="Stop allowing ChatGPT? Every reader's ChatGPT connection is cut at once.">Stop allowing ChatGPT</button>
+			} else {
+				<input type="hidden" name="allow" value="on"/>
+				<button type="submit" class="primary">Allow ChatGPT</button>
+			}
+		</form>
+	</section>
+	<section class="card">
+		<h2>Other applications</h2>
+		if len(v.Clients) == 0 {
+			<p class="muted">No other application is allowed.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th scope="col">Name</th><th scope="col">Client ID</th><th scope="col">Kind</th><th scope="col"></th></tr>
+				</thead>
+				for _, c := range v.Clients {
+					<tr>
+						<td>{ c.Name }</td>
+						<td><code>{ c.ID }</code></td>
+						<td><span class="muted">{ clientKindLabel(c) }</span></td>
+						<td>
+							<form method="post" action={ prefix + "admin/oauth/clients/delete" } hx-confirm={ "Remove " + c.Name + "? Every connection it has is cut." }>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								<input type="hidden" name="client_id" value={ c.ID }/>
+								<button type="submit" class="danger">Remove</button>
+							</form>
+						</td>
+					</tr>
+				}
+			</table>
+		}
+		<details>
+			<summary>Allow an application by its metadata URL</summary>
+			<form method="post" action={ prefix + "admin/oauth/clients" }>
+				<input type="hidden" name="csrf" value={ csrf }/>
+				<input type="hidden" name="kind" value="metadata"/>
+				<p>
+					<label for="oauth-metadata-url">Client ID Metadata Document URL</label>
+					<input id="oauth-metadata-url" name="metadata_url" type="url" required placeholder="https://example.com/oauth/client.json"/>
+					<span class="muted">The exact HTTPS URL the application uses as its client ID. Its redirect URIs are read from that document every time it connects.</span>
+				</p>
+				<p>
+					<label for="oauth-metadata-name">Name (optional)</label>
+					<input id="oauth-metadata-name" name="name" maxlength="80"/>
+				</p>
+				<button type="submit" class="primary">Allow</button>
+			</form>
+		</details>
+		<details>
+			<summary>Register an application by hand</summary>
+			<form method="post" action={ prefix + "admin/oauth/clients" }>
+				<input type="hidden" name="csrf" value={ csrf }/>
+				<input type="hidden" name="kind" value="registered"/>
+				<p>
+					<label for="oauth-client-name">Name</label>
+					<input id="oauth-client-name" name="name" maxlength="80" required/>
+				</p>
+				<p>
+					<label for="oauth-client-redirects">Redirect URIs, one per line</label>
+					<textarea id="oauth-client-redirects" name="redirect_uris" rows="3" required placeholder="https://client.example/callback"></textarea>
+					<span class="muted">HTTPS, or http on 127.0.0.1 or localhost for a desktop application.</span>
+				</p>
+				<label class="check"><input type="checkbox" name="confidential"/> Issue a client secret (for an application that runs on a server)</label>
+				<button type="submit" class="primary">Register</button>
+			</form>
+		</details>
+	</section>
+	<section class="card">
+		<h2>Connections</h2>
+		if len(v.Grants) == 0 {
+			<p class="muted">No reader has connected an assistant.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th scope="col">Reader</th><th scope="col">Assistant</th><th scope="col">May read</th><th scope="col">Last used</th><th scope="col"></th></tr>
+				</thead>
+				for _, g := range v.Grants {
+					<tr>
+						<td>{ g.UserName }</td>
+						<td>{ g.ClientName }</td>
+						<td>{ scopeTitles(g.Scopes) }</td>
+						<td><span class="muted">{ grantLastUsed(g) }</span></td>
+						<td>
+							<form method="post" action={ prefix + "admin/oauth/grants/" + g.ID + "/revoke" } hx-confirm={ "Cut " + g.UserName + "'s connection to " + g.ClientName + "?" }>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								<button type="submit" class="danger">Cut</button>
+							</form>
+						</td>
+					</tr>
+				}
+			</table>
+		}
+	</section>
+}
+
+func clientKindLabel(c store.OAuthClient) string {
+	if c.Kind == store.OAuthClientMetadata {
+		return "metadata URL"
+	}
+	if c.SecretSHA256 != "" {
+		return "registered, with secret"
+	}
+	return "registered, public"
+}

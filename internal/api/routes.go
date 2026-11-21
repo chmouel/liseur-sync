@@ -687,6 +687,23 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("PATCH /v1/tokens/{id}", tokH(s.HandleUpdateTokenScopes))
 	mux.Handle("DELETE /v1/tokens/{id}", tokH(s.HandleRevokeToken))
 
+	// Assistants (ADR-0069): absent unless the instance enabled them.
+	// The metadata documents are public by their nature; the token
+	// endpoint authenticates the client and the code or refresh token
+	// it presents; /mcp takes only an OAuth access token issued for it.
+	if s.OAuth != nil {
+		mux.Handle("GET /.well-known/oauth-authorization-server", http.HandlerFunc(s.OAuth.HandleASMetadata))
+		mux.Handle("GET /.well-known/oauth-protected-resource/mcp", http.HandlerFunc(s.OAuth.HandleResourceMetadata))
+		mux.Handle("GET /.well-known/oauth-protected-resource", http.HandlerFunc(s.OAuth.HandleResourceMetadata))
+		mux.Handle("POST /oauth/token",
+			auth.RequireSecureTransport(s.Cfg,
+				auth.RateLimitIP(s.OAuthLimiter, s.Cfg, http.HandlerFunc(s.OAuth.HandleToken))))
+		mcpH := auth.RequireSecureTransport(s.Cfg, s.OAuth.RequireToken(s.mcpHandler()))
+		mux.Handle("POST /mcp", mcpH)
+		mux.Handle("GET /mcp", mcpH)
+		mux.Handle("DELETE /mcp", mcpH)
+	}
+
 	// kosync adapter (feature-gated per instance).
 	if s.Kosync != nil && s.Cfg.Adapters.Kosync {
 		s.Kosync.Mount(mux, func(h http.Handler) http.Handler {

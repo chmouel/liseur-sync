@@ -336,6 +336,16 @@ func Run(t *testing.T, open OpenFunc) {
 		testRollupsAccumulateIntoAnExistingBucket(t, open)
 	})
 	t.Run("Housekeeping", func(t *testing.T) { testHousekeeping(t, open) })
+	t.Run("OAuth", func(t *testing.T) { testOAuth(t, open) })
+	t.Run("OAuthRevokeAllSpendsCodes", func(t *testing.T) {
+		testOAuthRevokeAllSpendsCodes(t, open)
+	})
+	t.Run("OAuthCodeExchangeIsOneTransaction", func(t *testing.T) {
+		testOAuthCodeExchangeIsOneTransaction(t, open)
+	})
+	t.Run("OAuthRefreshReuseDuringRotation", func(t *testing.T) {
+		testOAuthRefreshReuseDuringRotation(t, open)
+	})
 	t.Run("ConcurrentAppendGapFreeSeq", func(t *testing.T) { testConcurrentAppend(t, open) })
 	t.Run("AnnotationPushIdempotencyAndRevConflict", func(t *testing.T) {
 		testAnnotationPushIdempotencyAndRevConflict(t, open)

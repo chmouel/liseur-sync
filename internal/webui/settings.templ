@@ -27,6 +27,9 @@ templ settingsBody(prefix string, u userCtx, csrf string, v settingsView) {
 	if v.Section == settingsDevices {
 		@devicesBody(prefix, u, csrf, v.Devices.View, v.Devices.Tokens, v.Devices.Browsers,
 			v.Devices.Kosync, v.Devices.Koplugin, v.Devices.Base, v.Flash)
+		if v.Devices.View == settingsDevicesAssistants {
+			@assistantsBody(prefix, csrf, v.Devices.Assistants)
+		}
 	} else if v.Section == settingsAdmin {
 		@settingsAdminBody(prefix, csrf, v)
 	} else {
@@ -139,6 +142,7 @@ templ settingsAdminBody(prefix string, csrf string, v settingsView) {
 		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminMirror), "Mirror", v.Admin.View == settingsAdminMirror)
 		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminAudiobookshelf), "Audiobookshelf", v.Admin.View == settingsAdminAudiobookshelf)
 		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminSpeechToText), "Speech-to-text", v.Admin.View == settingsAdminSpeechToText)
+		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminAssistants), "AI assistants", v.Admin.View == settingsAdminAssistants)
 	</nav>
 	if v.Admin.View == settingsAdminFolders {
 		@adminFoldersBody(prefix, csrf, v.Admin.Folders, v.Admin.HasFolders, v.Admin.FoldersNext, v.Admin.Roots, v.Admin.OpenFolderForm, v.Flash)
@@ -152,6 +156,9 @@ templ settingsAdminBody(prefix string, csrf string, v settingsView) {
 		@adminAudiobookshelfBody(prefix, csrf, v.Admin.AudiobookshelfPanel, v.Flash)
 	} else if v.Admin.View == settingsAdminSpeechToText {
 		@adminSpeechToTextBody(prefix, csrf, v.Admin.SpeechToText, v.Flash)
+	} else if v.Admin.View == settingsAdminAssistants {
+		@adminFlash(v.Flash)
+		@adminAssistantsBody(prefix, csrf, v.Admin.Assistants)
 	} else {
 		@adminFlash(v.Flash)
 		@adminOverviewBody(prefix, v.Admin)

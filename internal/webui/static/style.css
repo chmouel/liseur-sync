@@ -697,6 +697,18 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); flex
 .auth-folder .auth-hint code { font-size: .95em; }
 .auth-optional { padding: .1rem .4rem; border-radius: .3rem; background: var(--surface-3); color: var(--muted); font-size: .62rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
 
+/* The consent screen an assistant sends a reader to (ADR-0069). */
+.consent-facts { display: grid; grid-template-columns: auto 1fr; gap: .35rem 1rem; margin: 0 0 1.4rem; font-size: .8rem; }
+.consent-facts dt { color: var(--ink-dim); }
+.consent-facts dd { margin: 0; overflow-wrap: anywhere; }
+.consent-scopes { display: grid; gap: .8rem; margin: 0; padding: 1rem 1.1rem; border: 1px solid var(--line-soft); border-radius: .7rem; background: var(--surface-2); }
+.consent-scopes legend { padding: 0 .4rem; color: var(--ink); font-size: .8rem; font-weight: 600; }
+.auth-form .consent-scope { display: flex; align-items: flex-start; gap: .7rem; font-weight: 400; }
+.consent-scope input { margin-top: .2rem; flex: none; }
+.consent-scope > span { display: grid; gap: .2rem; }
+.consent-actions { display: grid; grid-template-columns: 1fr 2fr; gap: .7rem; align-items: end; }
+.consent-actions button:first-child { min-height: 3.1rem; }
+
 .auth-footer { margin: 1.5rem 0 0; text-align: center; }
 
 /* The credit line: small print in the shell footer and on the auth

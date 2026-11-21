@@ -46,6 +46,12 @@ tags:
   - name: insights
   - name: library
   - name: opds
+  - name: assistants
+    description: |
+      Present only when `[mcp] enabled` is set. A read-only MCP endpoint
+      behind a built-in OAuth 2.1 server (ADR-0069). The authorization
+      endpoint is a web UI page, `/ui/oauth/authorize`, and is not part
+      of this API.
 
 paths:
   /adapter/kosync/sessions:
@@ -325,6 +331,160 @@ paths:
                     type: string
                     description: Abbreviated VCS revision. Omitted when unknown.
                     example: 46ac8da1b2c3
+
+  /.well-known/oauth-authorization-server:
+    get:
+      tags: [assistants]
+      summary: OAuth authorization server metadata (RFC 8414)
+      security: []
+      responses:
+        "200":
+          description: Metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  issuer: { type: string, format: uri }
+                  authorization_endpoint: { type: string, format: uri }
+                  token_endpoint: { type: string, format: uri }
+                  response_types_supported: { type: array, items: { type: string, enum: [code] } }
+                  grant_types_supported: { type: array, items: { type: string } }
+                  code_challenge_methods_supported: { type: array, items: { type: string, enum: [S256] } }
+                  token_endpoint_auth_methods_supported: { type: array, items: { type: string } }
+                  scopes_supported: { type: array, items: { type: string } }
+                  client_id_metadata_document_supported: { type: boolean }
+                  authorization_response_iss_parameter_supported: { type: boolean }
+
+  /.well-known/oauth-protected-resource/mcp:
+    get:
+      tags: [assistants]
+      summary: Protected resource metadata for /mcp (RFC 9728)
+      description: Also served at `/.well-known/oauth-protected-resource`.
+      security: []
+      responses:
+        "200":
+          description: Metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  resource: { type: string, format: uri, example: "https://books.example.com/mcp" }
+                  authorization_servers: { type: array, items: { type: string, format: uri } }
+                  scopes_supported: { type: array, items: { type: string } }
+                  bearer_methods_supported: { type: array, items: { type: string, enum: [header] } }
+                  resource_name: { type: string }
+                  resource_documentation: { type: string, format: uri }
+
+  /oauth/token:
+    post:
+      tags: [assistants]
+      summary: Exchange a code or refresh token for assistant tokens
+      description: |
+        Form-encoded body only, no query string, no repeated parameter.
+        A public client sends `client_id`; a confidential client
+        authenticates with HTTP Basic or `client_secret`. A client
+        assertion is refused. Refresh tokens rotate, and presenting a
+        spent one revokes the whole grant, as does replaying a code.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [grant_type]
+              properties:
+                grant_type: { type: string, enum: [authorization_code, refresh_token] }
+                code: { type: string }
+                code_verifier: { type: string }
+                redirect_uri: { type: string }
+                refresh_token: { type: string }
+                client_id: { type: string }
+                client_secret: { type: string }
+                resource: { type: string, description: "Must name `<public_url>/mcp` when sent." }
+      responses:
+        "200":
+          description: "Tokens, sent with `Cache-Control: no-store`."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string, example: lsmcp_at_... }
+                  token_type: { type: string, enum: [Bearer] }
+                  expires_in: { type: integer }
+                  refresh_token: { type: string, example: lsmcp_rt_... }
+                  scope: { type: string, example: "mcp:library mcp:reading" }
+        "400":
+          description: RFC 6749 error (`invalid_request`, `invalid_grant`, `invalid_target`, `unsupported_grant_type`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthError" }
+        "401":
+          description: "`invalid_client`"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthError" }
+        "405":
+          description: Not POST
+
+  /mcp:
+    post:
+      tags: [assistants]
+      summary: Model Context Protocol (streamable HTTP, stateless)
+      description: |
+        One JSON-RPC request or notification per POST; batches are
+        refused, and GET and DELETE answer 405. Requests carrying an
+        `Origin` must match `public_url`. Every tool is read-only and
+        needs the scope named in its description. Only an assistant
+        token is accepted here, and an assistant token is accepted
+        nowhere else. Rate limited per grant.
+      security:
+        - mcpToken: []
+      parameters:
+        - name: MCP-Protocol-Version
+          in: header
+          schema: { type: string, enum: ["2025-11-25", "2025-06-18", "2025-03-26"] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jsonrpc, method]
+              properties:
+                jsonrpc: { type: string, enum: ["2.0"] }
+                id: { oneOf: [{ type: string }, { type: integer }] }
+                method: { type: string, example: tools/call }
+                params: { type: object }
+      responses:
+        "200":
+          description: JSON-RPC response
+          content:
+            application/json:
+              schema: { type: object }
+        "202":
+          description: Notification accepted
+        "400":
+          description: Malformed JSON-RPC, a batch, or an unsupported protocol version
+        "401":
+          description: |
+            Missing or invalid token. `WWW-Authenticate: Bearer` names
+            `resource_metadata` for discovery.
+          headers:
+            WWW-Authenticate: { schema: { type: string } }
+        "403":
+          description: Origin not allowed
+        "405":
+          description: Not POST
+          headers:
+            Allow: { schema: { type: string } }
+        "413":
+          description: Body too large
+        "429":
+          $ref: "#/components/responses/Error"
 
   /v1/login:
     post:
@@ -3952,6 +4112,20 @@ components:
       type: http
       scheme: bearer
       description: Short-lived auth token from /v1/login (token management only)
+    mcpToken:
+      type: oauth2
+      description: Assistant token from the built-in OAuth server (`lsmcp_at_...`). Accepted only by `/mcp`.
+      flows:
+        authorizationCode:
+          authorizationUrl: /ui/oauth/authorize
+          tokenUrl: /oauth/token
+          refreshUrl: /oauth/token
+          scopes:
+            "mcp:library": Search the granted library and see book details
+            "mcp:reading": Reading positions, what is being read, highlights and notes
+            "mcp:insights": Reading statistics and calendar
+            "mcp:vocabulary": Saved vocabulary words
+            "mcp:text": Read book text around chapters and positions
     opdsBasic:
       type: http
       scheme: basic
@@ -4011,6 +4185,12 @@ components:
             properties: { status: { type: string } }
 
   schemas:
+    OAuthError:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        error_description: { type: string }
     OPDS2Feed:
       type: object
       description: |

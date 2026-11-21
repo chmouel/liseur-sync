@@ -989,6 +989,70 @@ into the file, and `LISEUR_STT_ENABLED`, `LISEUR_STT_URL` or
 `LISEUR_STT_MODEL` in the environment makes the page read-only. A saved
 change applies at the next start.
 
+## Assistants: ChatGPT and other MCP clients
+
+The server can expose a read-only [Model Context
+Protocol](https://modelcontextprotocol.io) endpoint at `/mcp`, so a
+reader can ask ChatGPT or another assistant about their library, their
+reading, and the text of their books (ADR-0069). It is off by default,
+and while it is off none of its routes exist.
+
+| Setting in `[mcp]` | Environment variable | Default |
+| --- | --- | --- |
+| `enabled` | `LISEUR_MCP_ENABLED` | `false` |
+| `public_url` | `LISEUR_MCP_PUBLIC_URL` | none, required when enabled |
+| `access_token_ttl` | | `1h` |
+| `refresh_token_ttl` | | `720h` |
+| `text_bytes_per_call` | | `16384` |
+| `text_bytes_per_hour` | | `1048576` |
+
+`public_url` is the bare `https` origin assistants reach this server at,
+such as `https://books.example.com`. Every token is bound to
+`<public_url>/mcp`, and the issuer is derived from it, never from a
+request's `Host`. Assistants also need these paths at that origin's
+root, unchanged, along with the web UI they send the reader to:
+
+- `/.well-known/oauth-authorization-server`
+- `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp`
+- `/oauth/token`
+- `/mcp`
+- `/ui/oauth/authorize`
+
+A proxy that forwards the whole origin already does this. A deployment
+served below a stripped path prefix needs a hostname of its own for the
+assistant endpoint. Keep the proxy from caching or rewriting the
+`Authorization` header.
+
+Enabling the endpoint allows no application yet. An administrator does
+that under **Settings → Administration → AI assistants**:
+
+- **Allow ChatGPT** trusts ChatGPT's published client metadata
+  document. Stopping it later cuts every reader's ChatGPT connection.
+- **Allow an application by its metadata URL** does the same for any
+  other client that publishes a Client ID Metadata Document. The
+  server fetches only URLs allowlisted here, only over HTTPS from a
+  public address, with no redirects.
+- **Register an application by hand** issues a client ID, and a secret
+  for a confidential client, for clients that cannot publish a
+  document. The secret is shown once.
+
+Then each reader connects their own assistant. In ChatGPT that is
+[chatgpt.com/plugins](https://chatgpt.com/plugins), the plus button, **Add
+custom MCP server**, the URL `<public_url>/mcp` and OAuth as the
+authentication. ChatGPT sends the reader to a consent page on this
+server, where they sign in if needed, see what the application asks
+for, and untick anything they would rather not share. A connection sees
+only that reader's reading state and only the folders that reader has
+been granted. Readers see and revoke their connections under
+**Settings → Devices & integrations → AI assistants**, and an administrator sees every
+connection on the admin page.
+
+Every tool is read-only; nothing an assistant does writes to the
+library, the reading state or the disk. Book text is limited per call
+and per connection per hour by the two `text_bytes_*` settings, and
+each connection may make 120 requests a minute. Grants, refreshes,
+revocations and refused replays are logged with an `oauth:` prefix.
+
 ## Configuration
 
 The content block is intentionally small:
@@ -1114,6 +1178,13 @@ that did nothing from one that did.
 Migrations run at startup under a cross-process lock. If a migration
 fails, the server refuses to start rather than run against a partially
 migrated schema. Back up before upgrades.
+
+### Assistant connections, migration 28
+
+Migration 28 adds four empty tables for the assistant endpoint's
+applications, grants, codes and tokens. It changes nothing an existing
+deployment can read, and the endpoint stays off until `[mcp] enabled`
+is set.
 
 ### Speech-to-text moved to `[speech_to_text]`
 

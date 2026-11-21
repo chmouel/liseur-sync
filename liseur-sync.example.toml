@@ -189,3 +189,16 @@ enabled = true
 url = "https://api.groq.com/openai/v1"
 model = "whisper-large-v3-turbo"
 # api_key = ""              # prefer LISEUR_STT_API_KEY
+
+# A read-only MCP endpoint at /mcp for ChatGPT and other assistants,
+# behind a built-in OAuth server (ADR-0069). Off by default. public_url
+# is the https origin assistants reach this server at; tokens are bound
+# to it. Allow ChatGPT or register other clients from Settings ->
+# Administration -> AI assistants.
+[mcp]
+enabled = false
+# public_url = "https://books.example.com"
+# access_token_ttl = "1h"
+# refresh_token_ttl = "720h"
+# text_bytes_per_call = 16384     # book text one tool call returns
+# text_bytes_per_hour = 1048576   # book text one connected app reads an hour

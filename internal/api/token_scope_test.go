@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
+	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -143,6 +144,7 @@ const (
 	gateLiveEvents                         // bearer, authenticated then filtered per topic
 	gateLoginCred                          // the short-lived login credential, not a device token
 	gateAudioStreamTicket                  // HMAC stream ticket bound to an active library-read token
+	gateMCP                                // OAuth access token for /mcp; no API token of any scope
 )
 
 // registeredRouteGates is the hand-kept half of the matrix: what each
@@ -154,6 +156,16 @@ var registeredRouteGates = map[string]routeGate{
 	"GET /healthz":      gatePublic,
 	"POST /v1/login":    gatePublic,
 	"POST /v1/register": gatePublic,
+
+	// ADR-0069: discovery documents are public, and the token endpoint
+	// authenticates the client and the grant it presents, not a bearer.
+	"GET /.well-known/oauth-authorization-server":   gatePublic,
+	"GET /.well-known/oauth-protected-resource":     gatePublic,
+	"GET /.well-known/oauth-protected-resource/mcp": gatePublic,
+	"POST /oauth/token":                             gatePublic,
+	"POST /mcp":                                     gateMCP,
+	"GET /mcp":                                      gateMCP,
+	"DELETE /mcp":                                   gateMCP,
 
 	"POST /v1/works/resolve":              gateSync,
 	"POST /v1/works/{id}/split":           gateSync,
@@ -351,7 +363,10 @@ func TestScopeMatrixCoversEveryRegisteredRoute(t *testing.T) {
 		return
 	}
 
-	ts, st := testServer(t)
+	ts, st := testServerWithConfig(t, func(c *config.Config) {
+		c.MCP.Enabled = true
+		c.MCP.PublicURL = "https://books.example"
+	})
 	ctx := t.Context()
 	if err := st.CreateUser(ctx, store.User{
 		ID: "matrix-user", Name: "matrix", CreatedAt: time.Now(),
@@ -575,6 +590,17 @@ func TestScopeMatrixCoversEveryRegisteredRoute(t *testing.T) {
 				}
 				if got := bearer(method, path, both); got != http.StatusUnauthorized {
 					t.Errorf("bearer token with invalid path ticket: %d, want 401", got)
+				}
+			case gateMCP:
+				// An API token is a different class of credential, never
+				// an assistant's, whatever its scopes (ADR-0069).
+				for name, secret := range map[string]string{
+					"none": "", "sync": syncOnly, "read-insights": insightsOnly,
+					"library-read+sync": both, "library-manage": libraryManageOnly, "login": login,
+				} {
+					if got := bearer(method, path, secret); got != http.StatusUnauthorized {
+						t.Errorf("%s token on /mcp: %d, want 401", name, got)
+					}
 				}
 			}
 		})

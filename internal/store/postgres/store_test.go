@@ -51,6 +51,7 @@ func reset(t *testing.T, s *Store) {
 		"crosspoint_session_receipts", "session_supersessions", "session_tombstones", "session_rollups_v2", "session_rollups", "sessions", "ops", "annotations", "vocabulary_words", "vocabulary_reviews", "work_translations", "work_translation_stamps", "aliases", "editions",
 		"works", "seq_counters", "compaction_state", "stats_revisions", "kosync_devices",
 		"koplugin_devices", "pairing_codes", "invites", "auth_sessions",
+		"oauth_tokens", "oauth_codes", "oauth_grants", "oauth_clients",
 		"token_scopes", "tokens", "device_settings", "user_settings", "users", "schema_migrations",
 	}
 	for _, tbl := range tables {

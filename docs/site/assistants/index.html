@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask ChatGPT about your books with LiseurSync</title>
+<link rel="icon" href="../img/icon.svg" type="image/svg+xml">
+<meta name="description" content="Connect ChatGPT or another assistant to your LiseurSync server. It can read your library, your progress and the text of your books up to the page you have reached, and it can never change anything.">
+<link rel="stylesheet" href="../site.css">
+</head>
+<body>
+<a class="skip" href="#chatgpt">Skip to the setup</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><img src="../img/icon.svg" width="28" height="28" alt="">Liseur<small>sync</small></a>
+    <nav aria-label="Page sections">
+      <a href="../">LiseurSync</a>
+      <a href="../liseur/">Android</a>
+      <a href="../koreader/">KOReader</a>
+      <a href="#ask">What to ask</a>
+      <a href="#chatgpt">ChatGPT</a>
+      <a href="#others">Other assistants</a>
+      <a href="#safety">What it can see</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section class="ai-hero">
+  <div class="wrap">
+    <div>
+      <h1>Ask about the book you are reading, without spoilers</h1>
+      <p class="lede">Connect ChatGPT, or any assistant that speaks MCP, to your own server. It can tell you who a character is, what the last chapter said or what you highlighted, and it stops at the page you have reached.</p>
+      <div class="actions">
+        <a class="button" href="#chatgpt">Connect ChatGPT</a>
+        <a class="button ghost" href="#others">Use another assistant</a>
+      </div>
+      <p class="hero-note">It can only read. Your server decides which assistants may ask, and you decide what each one sees.</p>
+    </div>
+
+    <figure class="convo" aria-labelledby="convo-cap">
+      <div class="reading-line" role="img" aria-label="Crime and Punishment drawn as a line. Marks show where the name Razumikhin appears. The marks before the reader's place at 41 percent are filled in; the ones after it are hollow.">
+        <span class="rl-title">Crime and Punishment</span>
+        <div class="rl-track">
+          <span class="rl-read"></span>
+          <i style="--p:8%;--d:0.47s"></i><i style="--p:19%;--d:0.85s"></i><i style="--p:22%;--d:0.95s"></i><i style="--p:24%;--d:1.02s"></i><i style="--p:27%;--d:1.12s"></i><i style="--p:30%;--d:1.22s"></i><i style="--p:33%;--d:1.33s"></i><i style="--p:35%;--d:1.40s"></i><i style="--p:37%;--d:1.46s"></i><i style="--p:39%;--d:1.53s"></i>
+          <i class="ahead" style="--p:47%"></i><i class="ahead" style="--p:52%"></i><i class="ahead" style="--p:58%"></i><i class="ahead" style="--p:66%"></i><i class="ahead" style="--p:74%"></i><i class="ahead" style="--p:83%"></i><i class="ahead" style="--p:91%"></i><i class="ahead" style="--p:97%"></i>
+          <span class="rl-you">You are here</span>
+        </div>
+      </div>
+      <div class="chat">
+        <p class="msg you">I'm back after a week away. Who is Razumikhin again?</p>
+        <p class="tool">Followed “Razumikhin” through Crime and Punishment, up to your place</p>
+        <div class="msg bot">
+          <p>Raskolnikov's friend from university, who scrapes a living from translation work. When Raskolnikov fell ill with fever, Razumikhin found him and looked after him with the doctor Zossimov.</p>
+          <p>In the chapters you just read he met Raskolnikov's mother and his sister Dunya, and he is plainly taken with Dunya.</p>
+        </div>
+      </div>
+      <figcaption id="convo-cap">Each mark is a place the name appears. The assistant reads the filled ones, the pages you have read.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="block" id="ask" aria-labelledby="ask-title">
+  <div class="wrap">
+    <h2 id="ask-title" class="prose">Things you can ask</h2>
+    <p class="prose">Ask in your own words. The assistant works out which part of your library to look at.</p>
+    <div class="asks">
+      <article>
+        <blockquote>“Make me a list of the characters so far, with one line each.”</blockquote>
+        <p>It follows each name through the pages you have read, with the text around every mention, and stops at your place.</p>
+      </article>
+      <article>
+        <blockquote>“Remind me what happened just before I stopped.”</blockquote>
+        <p>It reads the text leading up to your current position, the place Liseur, KOReader or the web reader last saved.</p>
+      </article>
+      <article>
+        <blockquote>“What did I highlight in Middlemarch, and how do those passages connect?”</blockquote>
+        <p>It sees your highlights and notes in reading order and can read the paragraph around any of them.</p>
+      </article>
+      <article>
+        <blockquote>“How much did I read this month, and when will I finish at this pace?”</blockquote>
+        <p>Reading time, streaks, pages and the time left in each book, counted in your own timezone.</p>
+      </article>
+      <article>
+        <blockquote>“Which books in this series haven't I started?”</blockquote>
+        <p>It searches your library and lists a series in order. It only sees the folders you can see yourself.</p>
+      </article>
+      <article>
+        <blockquote>“Quiz me on the words I looked up last week.”</blockquote>
+        <p>The words you saved while reading, with their definitions and the sentence you met them in.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="chatgpt" aria-labelledby="chatgpt-title">
+  <div class="wrap connect">
+    <div>
+      <h2 id="chatgpt-title">Connect ChatGPT</h2>
+      <p class="prose">The first step happens once per server. After that each reader connects their own ChatGPT account.</p>
+      <ol class="steps">
+        <li>
+          <h3>Turn it on</h3>
+          <p>Whoever runs the server sets <code>enabled = true</code> and <code>public_url</code> in the <code>[mcp]</code> section of the configuration and restarts it, then presses <b>Allow ChatGPT</b> under <b>Settings</b>, <b>Administration</b>, <b>AI assistants</b>.</p>
+        </li>
+        <li>
+          <h3>Add your server in ChatGPT</h3>
+          <p>Open <a href="https://chatgpt.com/plugins">chatgpt.com/plugins</a>, press the plus button and choose <b>Add custom MCP server</b>. Give it a name, paste your server's address followed by <code>/mcp</code> and choose <b>OAuth</b>.</p>
+        </li>
+        <li>
+          <h3>Say yes on your server</h3>
+          <p>ChatGPT opens your server's sign-in page. Untick anything you would rather keep to yourself, such as book text or statistics, and press <b>Allow</b>.</p>
+        </li>
+      </ol>
+    </div>
+    <figure class="consent" aria-labelledby="consent-cap">
+      <div class="consent-card">
+        <p class="consent-head">Connect ChatGPT?</p>
+        <p class="consent-sub">ChatGPT is asking to read from your account. It can only read. It cannot change, upload or delete anything.</p>
+        <p class="consent-legend">It may read</p>
+        <ul>
+          <li><span class="box on" aria-hidden="true"></span><span><b>Your library</b>Search the books you have access to and read their titles, authors and series.</span></li>
+          <li><span class="box on" aria-hidden="true"></span><span><b>Your reading</b>See what you are reading, where you are in each book, and your highlights, notes and bookmarks.</span></li>
+          <li><span class="box" aria-hidden="true"></span><span><b>Your statistics</b>See your reading time, pace, streaks and calendar.</span></li>
+          <li><span class="box on" aria-hidden="true"></span><span><b>Book text</b>Read passages from your books: chapters, the text around your position or a highlight, and every place a name appears.</span></li>
+        </ul>
+        <p class="consent-buttons"><span class="pill">Cancel</span><span class="pill solid">Allow</span></p>
+      </div>
+      <figcaption id="consent-cap">The page on your server where you choose. Here, statistics stay private.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="block" id="others" aria-labelledby="others-title">
+  <div class="wrap install">
+    <div class="prose">
+      <h2 id="others-title">Other assistants</h2>
+      <p>Any client that connects to remote MCP servers with OAuth can use it, such as Claude, a coding agent in your editor or a script of your own. Give it the same address ending in <code>/mcp</code>. It finds the sign-in page by itself.</p>
+      <p>Your server only answers applications its administrator allowed. If the application publishes a client metadata document, allow that document's URL on the <b>AI assistants</b> admin page. If it does not, register it there by hand and copy the client ID into the application, along with the secret if it needs one. The secret is shown once.</p>
+      <p>Developers will find the full flow, the scopes and the limits in <a href="https://github.com/chmouel/liseur-sync/blob/main/docs/integrating.md#assistants-over-mcp">docs/integrating.md</a>.</p>
+    </div>
+    <div>
+      <pre class="cmd"><span class="c"># the address to give an assistant</span>
+https://books.example.com/mcp
+
+<span class="c"># what it then finds by itself</span>
+/.well-known/oauth-protected-resource/mcp
+/.well-known/oauth-authorization-server</pre>
+      <table class="scopes">
+        <caption>What a reader can grant</caption>
+        <tr><th scope="row">Your library</th><td>Search books, see a book's details, list a series in order</td></tr>
+        <tr><th scope="row">Your reading</th><td>Where you are, what you are reading, highlights and notes</td></tr>
+        <tr><th scope="row">Your statistics</th><td>Totals, figures for one book, the reading calendar</td></tr>
+        <tr><th scope="row">Your vocabulary</th><td>The words you saved</td></tr>
+        <tr><th scope="row">Book text</th><td>Chapters, the text at a place, searching a book, following a name</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="band safety" id="safety" aria-labelledby="safety-title">
+  <div class="wrap">
+    <div>
+      <h2 id="safety-title">What an assistant can see</h2>
+      <p>A connection belongs to one reader. It sees that reader's books, places and notes, and only in the folders that reader has been given. Other readers' progress is out of its reach.</p>
+      <p>Everything it does is a lookup. It cannot move your place, edit a highlight, add a book or delete one.</p>
+    </div>
+    <ul class="guards">
+      <li><h3>Only applications you allowed</h3><p>No application can sign itself up. The administrator names each one, and removing it cuts every connection it has.</p></li>
+      <li><h3>Your password stays home</h3><p>You sign in on your own server. The assistant gets a key that opens one address and nothing else on the server.</p></li>
+      <li><h3>Keys that expire</h3><p>A key lasts an hour and is renewed in the background. If a renewal key is ever used twice, the connection is cut.</p></li>
+      <li><h3>Book text in small amounts</h3><p>Each answer gets a few pages at most, within an hourly allowance per connection, so a whole library cannot be copied out.</p></li>
+      <li><h3>A book is quoted, never obeyed</h3><p>Text comes back marked as a quotation, so a sentence in a book cannot pass itself off as an instruction.</p></li>
+      <li><h3>Disconnect at any time</h3><p>Your connections are under <b>Settings</b>, <b>Devices &amp; integrations</b>, <b>AI assistants</b>, each with a <b>Disconnect</b> button.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section class="block" id="help" aria-labelledby="help-title">
+  <div class="wrap">
+    <h2 id="help-title" class="prose">Questions</h2>
+    <div class="prose">
+      <details>
+        <summary>Does the assistant keep my books?</summary>
+        <p>It reads the passages it needs to answer you. What happens to a conversation afterwards depends on the assistant's company and your settings there. If you would rather it never sees any text, untick <b>Book text</b> when you connect.</p>
+      </details>
+      <details>
+        <summary>Can it spoil the ending?</summary>
+        <p>When it follows a character it can stop at your current place, and it does when you ask about what you have read so far. It can still open any chapter you ask for, so say "so far" when that is what you mean.</p>
+      </details>
+      <details>
+        <summary>Which position does it use?</summary>
+        <p>The one your devices last saved, from Liseur, KOReader, CrossPoint or the web reader. With an exact position it finds the paragraph; with only a percentage it estimates, and says so.</p>
+      </details>
+      <details>
+        <summary>ChatGPT cannot connect</summary>
+        <p>Check that the address ends in <code>/mcp</code> and begins with the server's configured <code>public_url</code>, that the server is reachable from the internet over HTTPS, and that ChatGPT is allowed on the <b>AI assistants</b> admin page.</p>
+      </details>
+      <details>
+        <summary>It says the book text allowance is spent</summary>
+        <p>Each connection may read a limited amount of book text per hour, and the message says when it renews. The administrator can raise the limit with <code>text_bytes_per_hour</code>.</p>
+      </details>
+      <details>
+        <summary>How do I see what is connected?</summary>
+        <p>Readers see their own connections under <b>Settings</b>, <b>Devices &amp; integrations</b>, <b>AI assistants</b>. The administrator sees every connection on the admin page and can cut any of them.</p>
+      </details>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Server setup is in <a href="https://github.com/chmouel/liseur-sync/blob/main/docs/deployment.md#assistants-chatgpt-and-other-mcp-clients">docs/deployment.md</a>, and the design behind it in <a href="https://github.com/chmouel/liseur-sync/blob/main/docs/adr/0069-mcp-for-assistants.md">ADR-0069</a>. The code is on <a href="https://github.com/chmouel/liseur-sync">GitHub</a>.</p>
+  </div>
+</footer>
+</body>
+</html>
