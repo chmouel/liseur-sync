@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -1287,6 +1288,22 @@ func (c *Config) validateMCP() error {
 	if err != nil || u.Host == "" || u.Hostname() == "" || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil || u.String() != c.MCP.PublicURL {
 		return fmt.Errorf("mcp.public_url must be a bare origin like https://books.example.com, got %q",
 			c.MCP.PublicURL)
+	}
+	if strings.HasPrefix(u.Host, "[") {
+		ip, err := netip.ParseAddr(u.Hostname())
+		if err != nil || !ip.Is6() {
+			return fmt.Errorf("mcp.public_url has an invalid IPv6 host")
+		}
+	} else if strings.Contains(u.Hostname(), ":") {
+		return fmt.Errorf("mcp.public_url has an invalid host")
+	}
+	if strings.HasSuffix(u.Host, ":") {
+		return fmt.Errorf("mcp.public_url has an empty port")
+	}
+	if port := u.Port(); port != "" {
+		if n, err := strconv.ParseUint(port, 10, 16); err != nil || n == 0 {
+			return fmt.Errorf("mcp.public_url has an invalid port")
+		}
 	}
 	switch u.Scheme {
 	case "https":

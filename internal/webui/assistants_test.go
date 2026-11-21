@@ -1,6 +1,8 @@
 package webui
 
 import (
+	"context"
+	"errors"
 	"html"
 	"io"
 	"net/http"
@@ -17,6 +19,12 @@ import (
 )
 
 const consentRedirect = "https://client.example/callback"
+
+type failingOAuthClientStore struct{ store.Store }
+
+func (s failingOAuthClientStore) OAuthClient(context.Context, string) (store.OAuthClient, error) {
+	return store.OAuthClient{}, errors.New("private database failure marker")
+}
 
 func assistantsServer(t *testing.T) (*httptest.Server, store.Store) {
 	t.Helper()
@@ -255,6 +263,21 @@ func TestOAuthConsentRefusesUntrustedRequests(t *testing.T) {
 		if got := resp.Header.Get("Location"); got != "./" {
 			t.Errorf("next %q: redirected to %q", next, got)
 		}
+	}
+}
+
+func TestOAuthConsentHidesLookupErrors(t *testing.T) {
+	ts, _ := testServerCfg(t, func(c *config.Config) {
+		c.MCP.Enabled = true
+		c.MCP.PublicURL = "https://books.example"
+	}, func(s *Server) {
+		s.OAuth = oauth.New(failingOAuthClientStore{s.St}, s.Cfg)
+	})
+	resp := getWith(t, ts, nil, "/ui/oauth/authorize?"+authorizeQuery(nil), nil)
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusInternalServerError || resp.Header.Get("Location") != "" ||
+		strings.Contains(body, "private database failure marker") || !strings.Contains(body, "could not be checked") {
+		t.Fatalf("lookup failure: %d %q %s", resp.StatusCode, resp.Header.Get("Location"), body)
 	}
 }
 
