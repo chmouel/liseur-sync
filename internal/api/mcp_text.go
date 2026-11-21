@@ -117,29 +117,28 @@ func (m *mcpService) bookText(ctx context.Context, userID, bookID string) (store
 		return b, nil, mcp.Errorf("this book's file is not available")
 	}
 	defer f.Close()
-	if t, ok := m.texts.get(b.ContentSHA256); ok {
-		return b, t, nil
-	}
-	idx, err := m.s.publicationIndex(ctx, b.ContentSHA256, f, size)
-	if err != nil {
-		return b, nil, mcp.Errorf("this book has no readable EPUB text")
-	}
-	archive, err := epub.OpenIndexedArchive(f, size, idx)
-	if err != nil {
-		return b, nil, mcp.Errorf("this book has no readable EPUB text")
-	}
-	read := func(name string) ([]byte, error) {
-		rc, n, err := archive.OpenResource(name)
+	t, err := m.texts.load(ctx, b.ContentSHA256, func() (*booktext.Book, error) {
+		idx, err := m.s.publicationIndex(ctx, b.ContentSHA256, f, size)
 		if err != nil {
 			return nil, err
 		}
-		defer rc.Close()
-		if n > maxTextResourceBytes {
-			return nil, fmt.Errorf("resource %q too large", name)
+		archive, err := epub.OpenIndexedArchive(f, size, idx)
+		if err != nil {
+			return nil, err
 		}
-		return io.ReadAll(io.LimitReader(rc, n))
-	}
-	t, err := booktext.Extract(ctx, idx, read)
+		read := func(name string) ([]byte, error) {
+			rc, n, err := archive.OpenResource(name)
+			if err != nil {
+				return nil, err
+			}
+			defer rc.Close()
+			if n > maxTextResourceBytes {
+				return nil, fmt.Errorf("resource %q too large", name)
+			}
+			return io.ReadAll(io.LimitReader(rc, n))
+		}
+		return booktext.Extract(ctx, idx, read)
+	})
 	switch {
 	case errors.Is(err, epub.ErrPublicationChanged):
 		if m.s.PublicationIndexes != nil {
@@ -154,7 +153,6 @@ func (m *mcpService) bookText(ctx context.Context, userID, bookID string) (store
 		}
 		return b, nil, mcp.Errorf("this book has no readable EPUB text")
 	}
-	m.texts.put(b.ContentSHA256, t)
 	return b, t, nil
 }
 
