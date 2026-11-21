@@ -1179,11 +1179,12 @@ Migrations run at startup under a cross-process lock. If a migration
 fails, the server refuses to start rather than run against a partially
 migrated schema. Back up before upgrades.
 
-### Assistant connections, migration 28
+### Assistant connections, migrations 28 and 29
 
 Migration 28 adds four empty tables for the assistant endpoint's
-applications, grants, codes and tokens. It changes nothing an existing
-deployment can read, and the endpoint stays off until `[mcp] enabled`
+applications, grants, codes and tokens. Migration 29 assigns a distinct
+registration identifier to each application. Existing applications and
+connections remain available. The endpoint stays off until `[mcp] enabled`
 is set.
 
 ### Speech-to-text moved to `[speech_to_text]`
