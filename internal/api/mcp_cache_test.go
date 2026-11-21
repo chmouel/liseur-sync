@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -124,22 +125,23 @@ func TestBookTextCacheRetriesCanceledLoad(t *testing.T) {
 	}
 }
 
-func TestBookTextScanRejectsCanceledContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, _, err := scanBookText(ctx, &booktext.Book{}, []string{"test"}, false, nil, 1)
-	if err != context.Canceled {
-		t.Fatalf("canceled scan: %v", err)
-	}
-}
-
-func TestBookTextScanWaitHonorsCancellation(t *testing.T) {
-	bookTextScan <- struct{}{}
-	defer func() { <-bookTextScan }()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, _, err := scanBookText(ctx, &booktext.Book{}, []string{"test"}, false, nil, 1)
-	if err != context.Canceled {
-		t.Fatalf("scan while busy: %v", err)
+func TestBookTextWorkRejectsCanceledContext(t *testing.T) {
+	for _, busy := range []bool{false, true} {
+		if busy {
+			bookTextWork <- struct{}{}
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		called := false
+		_, err := callWithBookTextWork(ctx, nil, func(context.Context, json.RawMessage) (any, error) {
+			called = true
+			return nil, nil
+		})
+		if busy {
+			<-bookTextWork
+		}
+		if err != context.Canceled || called {
+			t.Fatalf("busy %v: %v, called %v", busy, err, called)
+		}
 	}
 }
