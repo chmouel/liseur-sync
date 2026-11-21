@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -168,7 +169,38 @@ func validRequestID(id json.RawMessage) bool {
 	if id[0] == '"' {
 		return true
 	}
-	return (id[0] == '-' || id[0] >= '0' && id[0] <= '9') && !bytes.ContainsAny(id, ".eE")
+	if id[0] != '-' && (id[0] < '0' || id[0] > '9') {
+		return false
+	}
+	mantissa := string(id)
+	exponent := 0
+	if i := strings.IndexAny(mantissa, "eE"); i >= 0 {
+		exponentText := mantissa[i+1:]
+		mantissa = mantissa[:i]
+		var err error
+		exponent, err = strconv.Atoi(exponentText)
+		if err != nil {
+			if !strings.HasPrefix(exponentText, "-") {
+				return true
+			}
+			return strings.Trim(mantissa, "-0.") == ""
+		}
+	}
+	fractional := 0
+	if i := strings.IndexByte(mantissa, '.'); i >= 0 {
+		fractional = len(mantissa) - i - 1
+	}
+	trailing := 0
+	for i := len(mantissa) - 1; i >= 0; i-- {
+		switch mantissa[i] {
+		case '0':
+			trailing++
+		case '.', '-':
+		default:
+			return exponent >= fractional-trailing
+		}
+	}
+	return true
 }
 
 func writeRPC(w http.ResponseWriter, status int, resp response) {
