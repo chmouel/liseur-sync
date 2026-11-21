@@ -253,6 +253,9 @@ func (s *Store) RevokeAllUserCredentials(ctx context.Context, userID string, at 
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, lockOAuthClientsForCleanup); err != nil {
+		return err
+	}
 	var exists int
 	if err := tx.QueryRowContext(ctx, q(
 		`SELECT 1 FROM users WHERE id = ?`), userID).Scan(&exists); err != nil {

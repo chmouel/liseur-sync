@@ -27,6 +27,10 @@ func (s *Store) CreateOAuthClient(ctx context.Context, c store.OAuthClient) erro
 
 const oauthClientColumns = `id, generation, kind, name, redirect_uris, secret_sha256, created_at`
 
+// Client deletion cascades to grants before codes. Cleanup takes this lock
+// first, serializing deletion and other credential cleanup transactions.
+const lockOAuthClientsForCleanup = `LOCK TABLE oauth_clients IN SHARE ROW EXCLUSIVE MODE`
+
 func scanOAuthClient(row interface{ Scan(...any) error }) (store.OAuthClient, error) {
 	var c store.OAuthClient
 	var uris string
