@@ -644,8 +644,8 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 	if in.UpToCurrent && in.UpToProgression != nil {
 		return nil, mcp.Errorf("give at most one of up_to_current and up_to_progression")
 	}
-	if in.UpToProgression != nil && (*in.UpToProgression <= 0 || *in.UpToProgression > 1) {
-		return nil, mcp.Errorf("up_to_progression must be above 0 and at most 1")
+	if in.UpToProgression != nil && (*in.UpToProgression < 0 || *in.UpToProgression > 1) {
+		return nil, mcp.Errorf("up_to_progression must be between 0 and 1")
 	}
 	limit, err := limitOr(in.Limit, 40, 100)
 	if err != nil {
@@ -675,8 +675,10 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 	var stop *booktext.Position
 	switch {
 	case in.UpToProgression != nil:
-		ch, off := t.AtProgression(*in.UpToProgression)
-		stop = &booktext.Position{Chapter: ch, Offset: off}
+		stop = &booktext.Position{}
+		if *in.UpToProgression > 0 {
+			stop.Chapter, stop.Offset = t.AtProgression(*in.UpToProgression)
+		}
 	case in.UpToCurrent:
 		pl, _, err := m.readerPlace(ctx, userID, b, t, "current")
 		if err != nil {
