@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -65,5 +66,60 @@ func TestBookTextCacheCountsChapterMetadata(t *testing.T) {
 	}
 	if _, ok := cache.get("second"); !ok {
 		t.Fatal("second book not cached")
+	}
+}
+
+func TestBookTextCacheCoalescesConcurrentLoads(t *testing.T) {
+	cache := NewBookTextCache(2048)
+	book := &booktext.Book{Chapters: []booktext.Chapter{{Text: "shared"}}}
+	var calls atomic.Int32
+	started, release := make(chan struct{}), make(chan struct{})
+	extract := func() (*booktext.Book, error) {
+		calls.Add(1)
+		close(started)
+		<-release
+		return book, nil
+	}
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, err := cache.load(context.Background(), "digest", extract)
+			if err != nil || got != book {
+				t.Errorf("load: %p %v", got, err)
+			}
+		}()
+	}
+	<-started
+	close(release)
+	wg.Wait()
+	if calls.Load() != 1 {
+		t.Fatalf("extractions: %d", calls.Load())
+	}
+}
+
+func TestBookTextCacheRetriesCanceledLoad(t *testing.T) {
+	cache := NewBookTextCache(2048)
+	ctx, cancel := context.WithCancel(context.Background())
+	started, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := cache.load(ctx, "digest", func() (*booktext.Book, error) {
+			close(started)
+			<-release
+			return nil, ctx.Err()
+		})
+		done <- err
+	}()
+	<-started
+	cancel()
+	close(release)
+	if err := <-done; err != context.Canceled {
+		t.Fatalf("canceled load: %v", err)
+	}
+	book := &booktext.Book{}
+	if got, err := cache.load(context.Background(), "digest", func() (*booktext.Book, error) { return book, nil }); err != nil || got != book {
+		t.Fatalf("retry: %v %v", got, err)
 	}
 }

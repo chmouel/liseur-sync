@@ -2,6 +2,8 @@ package api
 
 import (
 	"container/list"
+	"context"
+	"errors"
 	"sync"
 	"time"
 	"unsafe"
@@ -22,7 +24,14 @@ type BookTextCache struct {
 	limit   int
 	bytes   int
 	entries map[string]*list.Element
+	loading map[string]*bookTextLoad
 	order   *list.List
+}
+
+type bookTextLoad struct {
+	done chan struct{}
+	book *booktext.Book
+	err  error
 }
 
 type bookTextEntry struct {
@@ -37,7 +46,7 @@ func NewBookTextCache(limit int) *BookTextCache {
 	if limit <= 0 {
 		limit = defaultBookTextBytes
 	}
-	return &BookTextCache{limit: limit, entries: map[string]*list.Element{}, order: list.New()}
+	return &BookTextCache{limit: limit, entries: map[string]*list.Element{}, loading: map[string]*bookTextLoad{}, order: list.New()}
 }
 
 func (c *BookTextCache) get(digest string) (*booktext.Book, bool) {
@@ -49,6 +58,48 @@ func (c *BookTextCache) get(digest string) (*booktext.Book, bool) {
 	}
 	c.order.MoveToFront(el)
 	return el.Value.(*bookTextEntry).book, true
+}
+
+func (c *BookTextCache) load(ctx context.Context, digest string, extract func() (*booktext.Book, error)) (*booktext.Book, error) {
+	for {
+		c.mu.Lock()
+		if el, ok := c.entries[digest]; ok {
+			c.order.MoveToFront(el)
+			book := el.Value.(*bookTextEntry).book
+			c.mu.Unlock()
+			return book, nil
+		}
+		if pending, ok := c.loading[digest]; ok {
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-pending.done:
+				if (errors.Is(pending.err, context.Canceled) || errors.Is(pending.err, context.DeadlineExceeded)) && ctx.Err() == nil {
+					continue
+				}
+				return pending.book, pending.err
+			}
+		}
+		pending := &bookTextLoad{done: make(chan struct{}), err: errors.New("book text extraction failed")}
+		c.loading[digest] = pending
+		c.mu.Unlock()
+		return c.finishLoad(digest, pending, extract)
+	}
+}
+
+func (c *BookTextCache) finishLoad(digest string, pending *bookTextLoad, extract func() (*booktext.Book, error)) (*booktext.Book, error) {
+	defer func() {
+		c.mu.Lock()
+		delete(c.loading, digest)
+		close(pending.done)
+		c.mu.Unlock()
+	}()
+	pending.book, pending.err = extract()
+	if pending.err == nil {
+		c.put(digest, pending.book)
+	}
+	return pending.book, pending.err
 }
 
 func (c *BookTextCache) put(digest string, b *booktext.Book) {
