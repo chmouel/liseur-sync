@@ -93,3 +93,111 @@ func TestRevokeAllDuringOAuthExchange(t *testing.T) {
 		t.Fatalf("grant from concurrent exchange remained usable: %v", err)
 	}
 }
+
+func TestHousekeepDuringOAuthRefreshRotation(t *testing.T) {
+	dsn := os.Getenv("LISEUR_PG_TEST_DSN")
+	if dsn == "" {
+		t.Skip("LISEUR_PG_TEST_DSN not set")
+	}
+	s, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	reset(t, s)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	u := storetest.MkUser(t, s, "oauth-housekeep-race")
+	now := time.Now().UTC()
+	client := store.OAuthClient{ID: "client", Kind: store.OAuthClientRegistered, Name: "client", CreatedAt: now}
+	if err := s.CreateOAuthClient(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateOAuthCode(ctx, store.OAuthCode{SHA256: "code", UserID: u.ID, ClientID: client.ID, ClientName: client.Name, RedirectURI: "https://client.example/cb", CodeChallenge: "challenge", Resource: "resource", Scopes: []string{"mcp:library"}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	tokens := func(prefix string, at time.Time) []store.OAuthToken {
+		return []store.OAuthToken{
+			{SHA256: prefix + "-access", Kind: store.OAuthTokenAccess, CreatedAt: at, ExpiresAt: at.Add(time.Hour)},
+			{SHA256: prefix + "-refresh", Kind: store.OAuthTokenRefresh, CreatedAt: at, ExpiresAt: at.Add(30 * 24 * time.Hour)},
+		}
+	}
+	if _, err := s.ExchangeOAuthCode(ctx, store.OAuthCodeRedemption{SHA256: "code", ClientID: client.ID, RedirectURI: "https://client.example/cb", CodeChallenge: "challenge", Resource: "resource", GrantID: "grant", Tokens: tokens("old", now)}, now); err != nil {
+		t.Fatal(err)
+	}
+	first := now.Add(29 * 24 * time.Hour)
+	if _, err := s.RotateOAuthRefresh(ctx, "old-refresh", client.ID, first, tokens("current", first)); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var pid int
+	if err := tx.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT sha256 FROM oauth_tokens WHERE sha256 = 'current-refresh' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	rotationTime := now.Add(58 * 24 * time.Hour)
+	rotationDone := make(chan error, 1)
+	go func() {
+		_, err := s.RotateOAuthRefresh(ctx, "current-refresh", client.ID, rotationTime, tokens("next", rotationTime))
+		rotationDone <- err
+	}()
+	for {
+		var blocked bool
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%UPDATE oauth_tokens SET used_at%' AND $1 = ANY(pg_blocking_pids(pid)))`, pid).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case err := <-rotationDone:
+			t.Fatalf("rotation did not wait: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	housekeepTime := now.Add(60 * 24 * time.Hour)
+	housekeepDone := make(chan error, 1)
+	go func() { housekeepDone <- s.Housekeep(ctx, housekeepTime) }()
+	for {
+		var blocked bool
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%SELECT g.id FROM oauth_grants g%')`).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case err := <-housekeepDone:
+			t.Fatalf("housekeeping did not wait: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-rotationDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-housekeepDone; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RotateOAuthRefresh(ctx, "old-refresh", client.ID, housekeepTime, tokens("replay", housekeepTime)); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("replay after concurrent housekeeping: %v", err)
+	}
+	if _, err := s.RotateOAuthRefresh(ctx, "next-refresh", client.ID, housekeepTime, tokens("again", housekeepTime)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("grant remained active: %v", err)
+	}
+}

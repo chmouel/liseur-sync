@@ -338,6 +338,7 @@ func Run(t *testing.T, open OpenFunc) {
 	})
 	t.Run("Housekeeping", func(t *testing.T) { testHousekeeping(t, open) })
 	t.Run("OAuth", func(t *testing.T) { testOAuth(t, open) })
+	t.Run("OAuthReplayAfterHousekeep", func(t *testing.T) { testOAuthReplayAfterHousekeep(t, open) })
 	t.Run("OAuthRevokeAllSpendsCodes", func(t *testing.T) {
 		testOAuthRevokeAllSpendsCodes(t, open)
 	})
