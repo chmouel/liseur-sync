@@ -38,8 +38,8 @@ const csvDate = "2006-01-02"
 func (s *Server) handleLibraryCSV(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 ) {
-	folder := r.URL.Query().Get("folder")
-	if folder != "" {
+	var folders []string
+	if folder := r.URL.Query().Get("folder"); folder != "" {
 		// FolderByID is the grant check: a folder this reader holds
 		// nothing in is a 404 here exactly as it is on the page, so the
 		// export cannot be used to ask about somebody else's shelf.
@@ -47,25 +47,32 @@ func (s *Server) handleLibraryCSV(
 			http.NotFound(w, r)
 			return
 		}
+		folders = []string{folder}
 	} else {
-		// An address that names no folder means the same thing here as
-		// it does on the page: the first one this reader holds.
-		folders, err := s.St.ListFolders(r.Context(), u.ID, "", 1)
-		if err != nil {
-			http.Error(w, "internal", http.StatusInternalServerError)
-			return
-		}
-		if len(folders) > 0 {
-			folder = folders[0].ID
+		// An export with no folder in its address comes from Settings,
+		// where there is no folder picker: it means every folder this
+		// account holds, walked through ListFolders's own cursor.
+		for after := ""; ; {
+			page, err := s.St.ListFolders(r.Context(), u.ID, after, folderPickerLimit)
+			if err != nil {
+				http.Error(w, "internal", http.StatusInternalServerError)
+				return
+			}
+			for _, f := range page {
+				folders = append(folders, f.ID)
+			}
+			if len(page) < folderPickerLimit {
+				break
+			}
+			after = page[len(page)-1].ID
 		}
 	}
 	v := LibraryView{
-		Selected: folder,
-		Filter:   normalizeFilter(r.URL.Query().Get("filter")),
-		Sort:     normalizeSort(r.URL.Query().Get("sort")),
-		Dir:      normalizeDir(r.URL.Query().Get("dir")),
+		Filter: normalizeFilter(r.URL.Query().Get("filter")),
+		Sort:   normalizeSort(r.URL.Query().Get("sort")),
+		Dir:    normalizeDir(r.URL.Query().Get("dir")),
 	}
-	rows, err := s.exportRows(r, u, v)
+	rows, err := s.exportRows(r, u, v, folders)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
@@ -88,30 +95,49 @@ func (s *Server) handleLibraryCSV(
 }
 
 // exportRows walks the same cursor the page's "Next page" link would,
-// collecting every row the shelf would show across all of its pages.
+// collecting every row the shelf would show across all of its pages and
+// across each folder asked for.
 func (s *Server) exportRows(
-	r *http.Request, u *store.User, v LibraryView,
+	r *http.Request, u *store.User, v LibraryView, folders []string,
 ) ([]LibraryRow, error) {
 	src, err := s.librarySource(r, u)
 	if err != nil {
 		return nil, err
 	}
-	var rows []LibraryRow
-	for cursor := ""; ; {
-		page := withCursor(r, cursor)
-		pageRows, _, next, err := s.libraryRows(
-			page, u.ID, v, src.works, src.links, src.readings, src.byBook, src.loc)
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, pageRows...)
-		// A cursor that came back unchanged would spin forever on a
-		// store bug; the export is not the place to discover one.
-		if next == "" || next == cursor {
-			return rows, nil
-		}
-		cursor = next
+	if len(folders) == 0 {
+		folders = []string{""}
 	}
+	var rows []LibraryRow
+	for i, folder := range folders {
+		v.Selected = folder
+		// Orphans and reading-state shelves do not belong to a folder,
+		// so they are collected once on the first pass rather than
+		// repeated for every granted folder.
+		works := src.works
+		if i > 0 {
+			if v.Filter == filterReading || v.Filter == filterFinished || v.Filter == filterWantToRead ||
+				v.Filter == filterPaused || v.Filter == filterDidNotFinish || v.Sort == sortLastRead {
+				break
+			}
+			works = nil
+		}
+		for cursor := ""; ; {
+			page := withCursor(r, cursor)
+			pageRows, _, next, err := s.libraryRows(
+				page, u.ID, v, works, src.links, src.readings, src.byBook, src.loc)
+			if err != nil {
+				return nil, err
+			}
+			rows = append(rows, pageRows...)
+			// A cursor that came back unchanged would spin forever on a
+			// store bug; the export is not the place to discover one.
+			if next == "" || next == cursor {
+				break
+			}
+			cursor = next
+		}
+	}
+	return rows, nil
 }
 
 // withCursor is the request the page would have sent for that cursor,

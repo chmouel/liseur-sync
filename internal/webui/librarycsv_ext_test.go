@@ -147,17 +147,33 @@ func TestTheExportIsOnlyWhatTheReaderMaySee(t *testing.T) {
 	}
 }
 
-// TestTheExportDefaultsToTheFirstGrantedFolder pins what an address
-// with no folder in it means here, since it is the same question the
-// page answers: the first folder this reader holds, not every folder
-// this server watches.
-func TestTheExportDefaultsToTheFirstGrantedFolder(t *testing.T) {
+// TestTheExportCoversEveryGrantedFolder pins what an address with no
+// folder in it means: Settings has no folder picker, so the export
+// walks every folder this reader holds and skips every folder they do
+// not.
+func TestTheExportCoversEveryGrantedFolder(t *testing.T) {
 	f := newBooksFixture(t)
 	f.observe(t, store.ObservedBook{
 		RelativePath: "mine.epub", SizeBytes: 4096, MTime: time.Now().UTC(),
 		ContentSHA256: strings.Repeat("d", 64), MediaType: "application/epub+zip",
-		Title: "Alice's Book",
+		Title: "Alice's First Book",
 	})
+	if err := f.st.CreateFolder(t.Context(), store.Folder{
+		ID: "folder-second", Name: "Alice's Second", RootPath: t.TempDir(),
+		Kind: store.FolderPlain, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.AssignUserFolder(t.Context(), "u1", "folder-second"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.ReconcileFolder(t.Context(), "folder-second", []store.ObservedBook{{
+		RelativePath: "second.epub", SizeBytes: 4096, MTime: time.Now().UTC(),
+		ContentSHA256: strings.Repeat("f", 64), MediaType: "application/epub+zip",
+		Title: "Alice's Second Book",
+	}}, false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.st.CreateFolder(t.Context(), store.Folder{
 		ID: "folder-other", Name: "Somebody Else's", RootPath: t.TempDir(),
 		Kind: store.FolderPlain, CreatedAt: time.Now().UTC(),
@@ -177,14 +193,16 @@ func TestTheExportDefaultsToTheFirstGrantedFolder(t *testing.T) {
 		t.Fatalf("export: got %d, want 200: %s", resp.StatusCode, body)
 	}
 	rows := csvRows(t, body)
-	if len(rows) != 2 {
-		t.Fatalf("got %d rows, want a header and one book: %q", len(rows), rows)
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want a header and two books: %q", len(rows), rows)
 	}
-	if rows[1][0] != "Alice's Book" {
-		t.Errorf("the default export began with %q, want Alice's own book", rows[1][0])
+	for _, want := range []string{"Alice's First Book", "Alice's Second Book"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the export missed %q from a granted folder", want)
+		}
 	}
 	if strings.Contains(body, "Not Alice's Book") {
-		t.Fatal("the default export reached a folder this reader holds nothing in")
+		t.Fatal("the export reached a folder this reader holds nothing in")
 	}
 }
 
