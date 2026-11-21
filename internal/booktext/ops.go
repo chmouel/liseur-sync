@@ -77,7 +77,7 @@ func (b *Book) Read(ch, start, maxBytes int) Passage {
 func (b *Book) Window(ch, off, before, after int) Passage {
 	c := &b.Chapters[ch]
 	off = snapBack(c.Text, min(max(off, 0), len(c.Text)))
-	start := snapBack(c.Text, max(off-before, 0))
+	start := snapForward(c.Text, max(off-before, 0))
 	end := snapBack(c.Text, min(off+after, len(c.Text)))
 	if start > 0 {
 		if i := strings.IndexAny(c.Text[start:off], " \n"); i >= 0 {
@@ -107,6 +107,13 @@ func (b *Book) passage(ch, start, end int) Passage {
 func snapBack(s string, i int) int {
 	for i > 0 && i < len(s) && !utf8.RuneStart(s[i]) {
 		i--
+	}
+	return i
+}
+
+func snapForward(s string, i int) int {
+	for i < len(s) && !utf8.RuneStart(s[i]) {
+		i++
 	}
 	return i
 }

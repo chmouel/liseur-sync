@@ -147,3 +147,11 @@ func TestWindowAndFirstSentence(t *testing.T) {
 		t.Fatalf("first sentence = %q", got)
 	}
 }
+
+func TestWindowDoesNotExceedByteAllowance(t *testing.T) {
+	b := &Book{Chapters: []Chapter{{Text: "é" + strings.Repeat("a", 2048), StartProg: 0, EndProg: 1}}}
+	p := b.Window(0, len("é"), 1, 1023)
+	if len(p.Text) > 1024 || !utf8.ValidString(p.Text) {
+		t.Fatalf("window returned %d bytes: %q", len(p.Text), p.Text)
+	}
+}
