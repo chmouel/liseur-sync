@@ -102,9 +102,9 @@ stores nothing the assistant derives.
 
 - ChatGPT connects with one switch on the admin page and a URL. A custom
   client needs an administrator to register it.
-- One appended migration adds four tables (`oauth_clients`,
-  `oauth_grants`, `oauth_codes`, `oauth_tokens`). It changes nothing an
-  existing deployment can see.
+- Migrations add four tables (`oauth_clients`, `oauth_grants`,
+  `oauth_codes`, `oauth_tokens`) and assign a registration identifier
+  to each client. Existing connections remain available.
 - The hourly text budget is in memory per process. A restart resets it.
   So does a second replica, which keeps its own.
 - An assistant with `mcp:text` can read any granted book. A reader who
