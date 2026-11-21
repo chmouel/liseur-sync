@@ -123,6 +123,9 @@ func snapForward(s string, i int) int {
 
 // FirstSentence is the opening of a chapter, at most maxBytes long.
 func (c *Chapter) FirstSentence(maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
 	t := c.Text
 	if c.Title != "" {
 		var heading strings.Builder
@@ -158,8 +161,14 @@ func (c *Chapter) FirstSentence(maxBytes int) string {
 		}
 	}
 	if end > maxBytes {
-		end = snapBack(t, maxBytes)
-		return strings.TrimSpace(t[:end]) + "…"
+		const ellipsis = "…"
+		if maxBytes > len(ellipsis) {
+			end = snapBack(t, maxBytes-len(ellipsis))
+			if prefix := strings.TrimSpace(t[:end]); prefix != "" {
+				return prefix + ellipsis
+			}
+		}
+		return strings.TrimSpace(t[:snapBack(t, maxBytes)])
 	}
 	return strings.TrimSpace(t[:end])
 }

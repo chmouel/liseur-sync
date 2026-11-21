@@ -67,7 +67,7 @@ func (m *mcpService) textTools() []mcp.Tool {
 		},
 		{
 			Name: "book_outline", Title: "Outline a book", Scope: oauth.ScopeText,
-			Description: "Like list_chapters, plus the opening sentence of each chapter, to find your way around a book cheaply.",
+			Description: "Like list_chapters, plus the opening sentence of each chapter, to find your way around a book cheaply. openings_truncated indicates openings shortened or omitted by the allowance.",
 			InputSchema: objectSchema(map[string]any{"book_id": bookID}, "book_id"),
 			Call:        m.bookOutline,
 		},
@@ -252,6 +252,7 @@ func (m *mcpService) chapters(ctx context.Context, raw json.RawMessage, outline 
 	list := make([]map[string]any, 0, len(t.Chapters))
 	used := 0
 	titlesTruncated := false
+	openingsTruncated := false
 	for i := range t.Chapters {
 		c := &t.Chapters[i]
 		entry := chapterJSON(i, t, c)
@@ -261,7 +262,12 @@ func (m *mcpService) chapters(ctx context.Context, raw json.RawMessage, outline 
 			titlesTruncated = true
 		}
 		if outline {
-			if s := c.FirstSentence(200); s != "" && used+len(s) <= allow {
+			s := c.FirstSentence(200)
+			if len(s) > allow-used {
+				openingsTruncated = true
+				s = c.FirstSentence(allow - used)
+			}
+			if s != "" {
 				entry["opening"] = s
 				used += len(s)
 			}
@@ -274,6 +280,9 @@ func (m *mcpService) chapters(ctx context.Context, raw json.RawMessage, outline 
 	out := map[string]any{"book_id": b.ID, "title": b.Title, "chapters": list, "content_notice": textNotice}
 	if titlesTruncated {
 		out["titles_truncated"] = true
+	}
+	if openingsTruncated {
+		out["openings_truncated"] = true
 	}
 	if t.Truncated {
 		out["truncated"] = true

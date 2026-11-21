@@ -369,6 +369,28 @@ func TestWindowAndFirstSentence(t *testing.T) {
 	}
 }
 
+func TestFirstSentenceRespectsByteLimit(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		max  int
+		want string
+	}{
+		{strings.Repeat("a", 201), 200, strings.Repeat("a", 197) + "…"},
+		{strings.Repeat("a", 200), 200, strings.Repeat("a", 200)},
+		{strings.Repeat("é", 101), 200, strings.Repeat("é", 98) + "…"},
+		{"éabc", 0, ""},
+		{"éabc", 1, ""},
+		{"éabc", 2, "é"},
+		{"éabc", 3, "éa"},
+		{"éabc", 4, "éab"},
+	} {
+		got := (&Chapter{Text: tc.text}).FirstSentence(tc.max)
+		if got != tc.want || len(got) > tc.max || !utf8.ValidString(got) {
+			t.Errorf("limit %d: got %q, want %q", tc.max, got, tc.want)
+		}
+	}
+}
+
 func TestWindowDoesNotExceedByteAllowance(t *testing.T) {
 	b := &Book{Chapters: []Chapter{{Text: "é" + strings.Repeat("a", 2048), StartProg: 0, EndProg: 1}}}
 	p := b.Window(0, len("é"), 1, 1023)

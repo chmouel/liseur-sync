@@ -1084,6 +1084,29 @@ func TestMCPChapterTitlesCountTowardsTextLimits(t *testing.T) {
 	}
 }
 
+func TestMCPOutlineUsesRemainingTextAllowance(t *testing.T) {
+	f := newFolderFixture(t)
+	bookID, digest := f.writeBook(t, "moby.epub", chapterEPUB(t))
+	text := &booktext.Book{}
+	for i := range 3 {
+		text.Chapters = append(text.Chapters, booktext.Chapter{Index: i, Title: strings.Repeat("a", 256)})
+	}
+	text.Chapters = append(text.Chapters, booktext.Chapter{Index: 3, Title: strings.Repeat("b", 100), Text: strings.Repeat("x", 201)})
+	f.srv.BookTexts = NewBookTextCache(0)
+	f.srv.BookTexts.put(digest, text)
+	f.enableMCP(t, func(c *config.MCPConfig) {
+		c.TextBytesPerCall = 1024
+		c.TextBytesPerHour = 2048
+	})
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeText)
+	out := f.mustCall(t, access, "book_outline", map[string]any{"book_id": bookID})
+	chapters := out["chapters"].([]any)
+	opening, _ := chapters[3].(map[string]any)["opening"].(string)
+	if len(opening) != 156 || !strings.HasSuffix(opening, "…") || out["openings_truncated"] != true {
+		t.Fatalf("opening with 156 bytes left: %q, truncated=%v", opening, out["openings_truncated"])
+	}
+}
+
 func TestMCPReadAtMultibyteWindowRespectsLimit(t *testing.T) {
 	f := newFolderFixture(t)
 	f.enableMCP(t, func(c *config.MCPConfig) {

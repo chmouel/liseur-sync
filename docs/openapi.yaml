@@ -440,7 +440,9 @@ paths:
         `Origin` must match `public_url`. Every tool is read-only and
         needs the scope named in its description. Only an assistant
         token is accepted here, and an assistant token is accepted
-        nowhere else. Rate limited per grant.
+        nowhere else. Rate limited per grant. `book_outline` reports
+        `openings_truncated` when its text allowance shortens or omits
+        chapter openings.
       security:
         - mcpToken: []
       parameters:
