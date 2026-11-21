@@ -533,6 +533,12 @@ func TestMCPMentionAtReadingBoundary(t *testing.T) {
 		t.Fatalf("push: %d %s", resp.StatusCode, body)
 	}
 	access := f.assistantToken(t, f.user.ID, oauth.ScopeText, oauth.ScopeReading)
+	start := f.mustCall(t, access, "find_mentions", map[string]any{
+		"book_id": bookID, "names": []string{"Mary Jane"}, "up_to_progression": 0,
+	})
+	if start["total"] != float64(0) || len(start["occurrences"].([]any)) != 0 {
+		t.Fatalf("mentions at start: %v", start)
+	}
 	result := f.mustCall(t, access, "find_mentions", map[string]any{
 		"book_id": bookID, "names": []string{"Mary Jane"}, "up_to_current": true,
 	})
