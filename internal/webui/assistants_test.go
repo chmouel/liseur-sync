@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -442,12 +443,29 @@ func TestAdminAssistants(t *testing.T) {
 	if code != 200 || !strings.Contains(body, "Allow ChatGPT") {
 		t.Fatalf("admin assistants page: %d", code)
 	}
+	formPattern := regexp.MustCompile(`<form[^>]*action="[^"]*admin/oauth/chatgpt"[^>]*>`)
+	if form := formPattern.FindString(body); form == "" || strings.Contains(form, "hx-confirm") {
+		t.Fatalf("enable form confirmation: %q", form)
+	}
 	csrf := extractCSRF(t, body)
 	if _, body = postForm(t, ts, cookie, "/ui/admin/oauth/chatgpt", url.Values{"csrf": {csrf}, "allow": {"on"}}); !strings.Contains(body, "ChatGPT is allowed.") {
 		t.Fatalf("allow ChatGPT: %s", body)
 	}
 	if c, err := st.OAuthClient(t.Context(), oauth.ChatGPTMetadataURL); err != nil || c.Kind != store.OAuthClientMetadata {
 		t.Fatalf("ChatGPT client: %+v %v", c, err)
+	}
+	if form := html.UnescapeString(formPattern.FindString(body)); !strings.Contains(form, `hx-confirm="Stop allowing ChatGPT?`) {
+		t.Fatalf("disable form has no confirmation: %q", form)
+	}
+	for _, value := range []string{"", "typo"} {
+		resp := postRaw(t, ts, cookie, "/ui/admin/oauth/chatgpt", url.Values{"csrf": {csrf}, "allow": {value}})
+		readBody(t, resp)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("invalid ChatGPT action %q: %d", value, resp.StatusCode)
+		}
+		if _, err := st.OAuthClient(t.Context(), oauth.ChatGPTMetadataURL); err != nil {
+			t.Fatalf("invalid action removed ChatGPT: %v", err)
+		}
 	}
 	postForm(t, ts, cookie, "/ui/admin/oauth/chatgpt", url.Values{"csrf": {csrf}, "allow": {"off"}})
 	if _, err := st.OAuthClient(t.Context(), oauth.ChatGPTMetadataURL); err == nil {

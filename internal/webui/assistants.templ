@@ -154,17 +154,20 @@ templ adminAssistantsBody(prefix string, csrf string, v adminAssistantsView) {
 		<section class="card">
 			<h2>ChatGPT</h2>
 			<p class="muted">ChatGPT identifies itself with a metadata document published at chatgpt.com. Allowing it lets any reader here connect their own ChatGPT account; it gets nothing until a reader says yes.</p>
-			<form method="post" action={ prefix + "admin/oauth/chatgpt" }>
-				<input type="hidden" name="csrf" value={ csrf }/>
-				if v.ChatGPT {
+			if v.ChatGPT {
+				<form method="post" action={ prefix + "admin/oauth/chatgpt" } hx-confirm="Stop allowing ChatGPT? Every reader's ChatGPT connection is cut at once.">
+					<input type="hidden" name="csrf" value={ csrf }/>
 					<input type="hidden" name="allow" value="off"/>
 					<p class="ok">ChatGPT is allowed.</p>
-					<button type="submit" class="danger" hx-confirm="Stop allowing ChatGPT? Every reader's ChatGPT connection is cut at once.">Stop allowing ChatGPT</button>
-				} else {
+					<button type="submit" class="danger">Stop allowing ChatGPT</button>
+				</form>
+			} else {
+				<form method="post" action={ prefix + "admin/oauth/chatgpt" }>
+					<input type="hidden" name="csrf" value={ csrf }/>
 					<input type="hidden" name="allow" value="on"/>
 					<button type="submit" class="primary">Allow ChatGPT</button>
-				}
-			</form>
+				</form>
+			}
 		</section>
 		<section class="card">
 			<h2>Other applications</h2>
