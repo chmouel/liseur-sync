@@ -374,6 +374,9 @@ func (s *Server) handleAdminCreateOAuthClient(w http.ResponseWriter, r *http.Req
 // registered here.
 func (s *Server) newOAuthClient(r *http.Request) (store.OAuthClient, string, error) {
 	now := time.Now().UTC()
+	if err := oauth.ValidateClientName(r.FormValue("name")); err != nil {
+		return store.OAuthClient{}, "", err
+	}
 	if r.FormValue("kind") == store.OAuthClientMetadata {
 		docURL := strings.TrimSpace(r.FormValue("metadata_url"))
 		if err := oauth.ValidateMetadataURL(docURL); err != nil {

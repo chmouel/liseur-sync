@@ -377,6 +377,17 @@ func TestAdminAssistants(t *testing.T) {
 	if _, err := st.OAuthClient(t.Context(), oauth.ChatGPTMetadataURL); err == nil {
 		t.Fatal("ChatGPT still allowed")
 	}
+	for _, kind := range []string{"registered", "metadata"} {
+		for _, name := range []string{"bad\x00name", "bad\xffname"} {
+			_, body = postForm(t, ts, cookie, "/ui/admin/oauth/clients", url.Values{
+				"csrf": {csrf}, "kind": {kind}, "name": {name},
+				"metadata_url": {"https://client.example/metadata"}, "redirect_uris": {"https://client.example/cb"},
+			})
+			if !strings.Contains(body, "client name contains invalid text") {
+				t.Fatalf("accepted invalid %s client name", kind)
+			}
+		}
+	}
 
 	code, body = postForm(t, ts, cookie, "/ui/admin/oauth/clients", url.Values{
 		"csrf": {csrf}, "kind": {"registered"}, "name": {"Desk"},

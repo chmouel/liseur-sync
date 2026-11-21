@@ -401,6 +401,12 @@ func TestMetadataClient(t *testing.T) {
 	if _, err := f.srv.ResolveClient(ctx, id); err == nil {
 		t.Fatal("a plain-http redirect was accepted")
 	}
+	doc = map[string]any{"client_id": id, "client_name": "Bad\x00Name", "redirect_uris": []string{redirect}, "token_endpoint_auth_method": "none"}
+	if _, err := f.srv.ParseAuthorize(ctx, authorizeQuery(id)); err == nil {
+		t.Fatal("a metadata client with a NUL in its name was accepted")
+	} else if ae, ok := err.(*oauth.AuthorizeError); !ok || ae.Code != "unauthorized_client" || ae.Redirect != "" {
+		t.Fatalf("invalid metadata authorization: %v", err)
+	}
 	doc = map[string]any{"client_id": id, "client_name": "Example App", "redirect_uris": []string{redirect}, "token_endpoint_auth_method": "none"}
 	c, err := f.srv.ResolveClient(ctx, id)
 	if err != nil || c.Name != "Example App" || c.Host() == "" {
