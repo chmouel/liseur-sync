@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ask ChatGPT about your books with LiseurSync</title>
 <link rel="icon" href="../img/icon.svg" type="image/svg+xml">
-<meta name="description" content="Connect ChatGPT or another assistant to your LiseurSync server. It can read your library, your progress and the text of your books up to the page you have reached, and it can never change anything.">
+<meta name="description" content="Connect ChatGPT or another assistant to your LiseurSync server. It can read your library, your progress and book text according to the permissions you grant.">
 <link rel="stylesheet" href="../site.css">
 </head>
 <body>
@@ -30,8 +30,8 @@
 <section class="ai-hero">
   <div class="wrap">
     <div>
-      <h1>Ask about the book you are reading, without spoilers</h1>
-      <p class="lede">Connect ChatGPT, or any assistant that speaks MCP, to your own server. It can tell you who a character is, what the last chapter said or what you highlighted, and it stops at the page you have reached.</p>
+      <h1>Ask about the book you are reading</h1>
+      <p class="lede">Connect ChatGPT, or any assistant that speaks MCP, to your own server. It can tell you who a character is, what the last chapter said or what you highlighted. A search can use your saved reading position as a cutoff.</p>
       <div class="actions">
         <a class="button" href="#chatgpt">Connect ChatGPT</a>
         <a class="button ghost" href="#others">Use another assistant</a>
@@ -57,7 +57,7 @@
           <p>In the chapters you just read he met Raskolnikov's mother and his sister Dunya, and he is plainly taken with Dunya.</p>
         </div>
       </div>
-      <figcaption id="convo-cap">Each mark is a place the name appears. The assistant reads the filled ones, the pages you have read.</figcaption>
+      <figcaption id="convo-cap">Each mark is a place the name appears. In this example, the assistant searches up to the saved position.</figcaption>
     </figure>
   </div>
 </section>
@@ -69,11 +69,11 @@
     <div class="asks">
       <article>
         <blockquote>“Make me a list of the characters so far, with one line each.”</blockquote>
-        <p>It follows each name through the pages you have read, with the text around every mention, and stops at your place.</p>
+        <p>The assistant can search for names up to your saved position and read the text around each mention.</p>
       </article>
       <article>
         <blockquote>“Remind me what happened just before I stopped.”</blockquote>
-        <p>It reads the text leading up to your current position, the place Liseur, KOReader or the web reader last saved.</p>
+        <p>The assistant can read around the position Liseur, KOReader or the web reader last saved.</p>
       </article>
       <article>
         <blockquote>“What did I highlight in Middlemarch, and how do those passages connect?”</blockquote>
@@ -188,7 +188,7 @@ https://books.example.com/mcp
       </details>
       <details>
         <summary>Can it spoil the ending?</summary>
-        <p>When it follows a character it can stop at your current place, and it does when you ask about what you have read so far. It can still open any chapter you ask for, so say "so far" when that is what you mean.</p>
+        <p>A text grant lets the assistant read any chapter. It can limit an individual mention search to your saved place, but the assistant chooses which tools and cutoffs to use. A saved position can be an estimate, and a passage around it can include later text.</p>
       </details>
       <details>
         <summary>Which position does it use?</summary>
