@@ -152,9 +152,8 @@ type OAuthCode struct {
 type OAuthCodeRedemption struct {
 	SHA256   string
 	ClientID string
-	// RedirectURI and CodeChallenge are what the request presented;
-	// the challenge is the S256 digest of the verifier, taken here so
-	// the store never sees a verifier.
+	// RedirectURI is optional but must match when supplied. CodeChallenge
+	// is the S256 digest of the verifier, so the store never sees it.
 	RedirectURI   string
 	CodeChallenge string
 	// Resource is the RFC 8707 resource the request named. Empty means
