@@ -88,3 +88,22 @@ func TestWebSessionLifetimeDefaultsAndValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPPublicURLIsBareOrigin(t *testing.T) {
+	for _, value := range []string{"https://books.example?", "https://books.example#", "https://books.example?x=1", "https://books.example#x"} {
+		cfg := Default()
+		cfg.MCP.Enabled = true
+		cfg.MCP.PublicURL = value
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("accepted %q", value)
+		}
+	}
+	for _, value := range []string{"https://books.example", "https://books.example/"} {
+		cfg := Default()
+		cfg.MCP.Enabled = true
+		cfg.MCP.PublicURL = value
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("rejected %q: %v", value, err)
+		}
+	}
+}
