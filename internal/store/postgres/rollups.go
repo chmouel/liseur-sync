@@ -409,6 +409,9 @@ func (s *Store) Housekeep(ctx context.Context, now time.Time) error {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, lockOAuthClientsForCleanup); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, q(
 		`DELETE FROM pairing_codes WHERE expires_at < ?`), now); err != nil {
 		return err

@@ -170,6 +170,182 @@ func TestDeleteClientDuringOAuthExchange(t *testing.T) {
 	}
 }
 
+func TestDeleteClientDuringCredentialCleanup(t *testing.T) {
+	dsn := os.Getenv("LISEUR_PG_TEST_DSN")
+	if dsn == "" {
+		t.Skip("LISEUR_PG_TEST_DSN not set")
+	}
+	for _, operation := range []string{"housekeeping", "revoke all"} {
+		t.Run(operation, func(t *testing.T) {
+			s, err := Open(dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			reset(t, s)
+			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+			defer cancel()
+			if err := s.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			u := storetest.MkUser(t, s, "oauth-client-cleanup")
+			now := time.Now().UTC()
+			client := store.OAuthClient{ID: "client", Kind: store.OAuthClientRegistered, Name: "client", CreatedAt: now}
+			if err := s.CreateOAuthClient(ctx, client); err != nil {
+				t.Fatal(err)
+			}
+			client.Generation = storetest.MkOAuthClientGeneration(t, s, client.ID)
+			code := store.OAuthCode{SHA256: "code", UserID: u.ID, ClientID: client.ID, ClientGeneration: client.Generation,
+				ClientName: client.Name, RedirectURI: "https://client.example/cb", CodeChallenge: "challenge",
+				Resource: "resource", Scopes: []string{"mcp:library"}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}
+			session := storetest.MkOAuthSession(t, s, u.ID, "cleanup", now)
+			if err := s.CreateOAuthCode(ctx, code, session); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.ExchangeOAuthCode(ctx, store.OAuthCodeRedemption{SHA256: code.SHA256, ClientID: client.ID,
+				RedirectURI: code.RedirectURI, CodeChallenge: code.CodeChallenge, Resource: code.Resource, GrantID: "grant",
+				Tokens: []store.OAuthToken{{SHA256: "access", Kind: store.OAuthTokenAccess, CreatedAt: now, ExpiresAt: now.Add(time.Hour)}},
+			}, now); err != nil {
+				t.Fatal(err)
+			}
+			code.SHA256 = "pending"
+			if err := s.CreateOAuthCode(ctx, code, session); err != nil {
+				t.Fatal(err)
+			}
+			tx, err := s.db.BeginTx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			var pid int
+			if err := tx.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM oauth_clients WHERE id = 'client'`); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() {
+				if operation == "housekeeping" {
+					done <- s.Housekeep(ctx, now.Add(48*time.Hour))
+				} else {
+					done <- s.RevokeAllUserCredentials(ctx, u.ID, now)
+				}
+			}()
+			for {
+				var blocked bool
+				if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock'
+					AND query = 'LOCK TABLE oauth_clients IN SHARE ROW EXCLUSIVE MODE' AND $1 = ANY(pg_blocking_pids(pid)))`, pid).Scan(&blocked); err != nil {
+					t.Fatal(err)
+				}
+				if blocked {
+					break
+				}
+				select {
+				case err := <-done:
+					t.Fatalf("cleanup did not wait for client deletion: %v", err)
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				case <-time.After(10 * time.Millisecond):
+				}
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.OAuthAccess(ctx, "access", now); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("deleted client's access token remained usable: %v", err)
+			}
+		})
+	}
+}
+
+func TestHousekeepDuringRevokeAll(t *testing.T) {
+	dsn := os.Getenv("LISEUR_PG_TEST_DSN")
+	if dsn == "" {
+		t.Skip("LISEUR_PG_TEST_DSN not set")
+	}
+	s, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	reset(t, s)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	u := storetest.MkUser(t, s, "oauth-cleanup-overlap")
+	now := time.Now().UTC()
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO tokens (id, user_id, device_id, name, scope, sha256, created_at, expires_at)
+		VALUES ('token', $1, 'device', 'token', '', 'hash', $2, $3)`, u.ID, now.Add(-90*24*time.Hour), now.Add(-60*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	storetest.MkOAuthSession(t, s, u.ID, "cleanup-overlap", now)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var pid int
+	if err := tx.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT id FROM tokens WHERE id = 'token' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	revokeDone := make(chan error, 1)
+	go func() { revokeDone <- s.RevokeAllUserCredentials(ctx, u.ID, now) }()
+	var revokePID int
+	for revokePID == 0 {
+		if err := s.db.QueryRowContext(ctx, `SELECT COALESCE((SELECT pid FROM pg_stat_activity WHERE wait_event_type = 'Lock'
+			AND query LIKE '%UPDATE tokens SET revoked_at%' AND $1 = ANY(pg_blocking_pids(pid)) LIMIT 1), 0)`, pid).Scan(&revokePID); err != nil {
+			t.Fatal(err)
+		}
+		if revokePID != 0 {
+			break
+		}
+		select {
+		case err := <-revokeDone:
+			t.Fatalf("revocation did not wait: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	housekeepDone := make(chan error, 1)
+	go func() { housekeepDone <- s.Housekeep(ctx, now.Add(48*time.Hour)) }()
+	for {
+		var blocked bool
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock'
+			AND query = 'LOCK TABLE oauth_clients IN SHARE ROW EXCLUSIVE MODE' AND $1 = ANY(pg_blocking_pids(pid)))`, revokePID).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case err := <-housekeepDone:
+			t.Fatalf("housekeeping did not wait for revocation: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-revokeDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-housekeepDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHousekeepDuringOAuthRefreshRotation(t *testing.T) {
 	dsn := os.Getenv("LISEUR_PG_TEST_DSN")
 	if dsn == "" {
