@@ -207,7 +207,7 @@ func (m *mcpService) tools() []mcp.Tool {
 		},
 		{
 			Name: "get_work_stats", Title: "Statistics for one work", Scope: oauth.ScopeInsights,
-			Description: "Reading time, pages, sessions, progress and estimated time left for one work. Without work_id, the same figures for every work read in the range.",
+			Description: "Reading time, pages and sessions for one work. Progress and estimated time left require the reading scope. Without work_id, returns every work read in the range.",
 			InputSchema: objectSchema(map[string]any{
 				"work_id": strProp("The work.", maxIDLen),
 				"range":   strProp("Last N days as \"Nd\", or \"all\" (default).", 8),
@@ -766,6 +766,23 @@ func (m *mcpService) statsSummary(ctx context.Context, raw json.RawMessage) (any
 	return out, nil
 }
 
+type mcpWorkStats struct {
+	insights.Work
+	CurrentProgression *float64        `json:"current_progression,omitempty"`
+	Status             *reading.Status `json:"status,omitempty"`
+	ETASeconds         **float64       `json:"eta_seconds,omitempty"`
+}
+
+func scopedWorkStats(work insights.Work, readingAllowed bool) mcpWorkStats {
+	out := mcpWorkStats{Work: work}
+	if readingAllowed {
+		out.CurrentProgression = &work.CurrentProgression
+		out.Status = &work.Status
+		out.ETASeconds = &work.ETASeconds
+	}
+	return out
+}
+
 func (m *mcpService) workStats(ctx context.Context, raw json.RawMessage) (any, error) {
 	var in struct {
 		WorkID string `json:"work_id"`
@@ -787,8 +804,14 @@ func (m *mcpService) workStats(ctx context.Context, raw json.RawMessage) (any, e
 	if err != nil {
 		return nil, err
 	}
+	access, _ := oauth.AccessFrom(ctx)
+	readingAllowed := oauth.HasScope(access, oauth.ScopeReading)
 	if in.WorkID == "" {
-		out := map[string]any{"works": res.Works, "timezone": snap.Timezone}
+		works := make([]mcpWorkStats, 0, len(res.Works))
+		for _, work := range res.Works {
+			works = append(works, scopedWorkStats(work, readingAllowed))
+		}
+		out := map[string]any{"works": works, "timezone": snap.Timezone}
 		describe(win, out)
 		return out, nil
 	}
@@ -796,7 +819,7 @@ func (m *mcpService) workStats(ctx context.Context, raw json.RawMessage) (any, e
 	if !ok {
 		return nil, mcp.Errorf("no statistics for that work in this range")
 	}
-	return w, nil
+	return scopedWorkStats(w, readingAllowed), nil
 }
 
 const maxMCPCalendarDays = 400
