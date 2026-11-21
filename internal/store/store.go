@@ -2584,6 +2584,7 @@ type Store interface {
 	AddAliases(ctx context.Context, userID, workID string, ids []Identifier) error
 	ClearPending(ctx context.Context, userID, workID string) error
 	WorkByID(ctx context.Context, userID, workID string) (Work, error)
+	WorkSummaryByID(ctx context.Context, userID, workID string) (WorkSummary, error)
 	ListWorks(ctx context.Context, userID string) ([]WorkSummary, error)
 	SplitWork(ctx context.Context, userID, workID, editionSHA string, aliasValues []Identifier, newWork Work) error
 	MergeWorks(ctx context.Context, userID, fromWorkID, intoWorkID string) error

@@ -529,10 +529,11 @@ func (m *mcpService) getReadingStatus(ctx context.Context, raw json.RawMessage) 
 		if err := requireID("work_id", in.WorkID); err != nil {
 			return nil, err
 		}
-		w, err := m.s.St.WorkByID(ctx, userID, in.WorkID)
+		summary, err := m.s.St.WorkSummaryByID(ctx, userID, in.WorkID)
 		if err != nil {
 			return nil, mcpErr(err, "work")
 		}
+		w := summary.Work
 		readings, err := m.s.St.WorkReadings(ctx, userID, []string{w.ID})
 		if err != nil {
 			return nil, err
@@ -540,11 +541,6 @@ func (m *mcpService) getReadingStatus(ctx context.Context, raw json.RawMessage) 
 		snap, err := m.s.St.PositionSnapshot(ctx, userID, w.ID, 10)
 		if err != nil {
 			return nil, err
-		}
-		summary := store.WorkSummary{Work: w}
-		if len(snap.Ops) > 0 {
-			p, at := snap.Ops[0].Progression, snap.Ops[0].ClientTS
-			summary.Progression, summary.LastActive = &p, &at
 		}
 		out := m.workEntry(ctx, userID, summary, readings[w.ID])
 		furthest := 0.0
@@ -897,7 +893,7 @@ func (m *mcpService) listVocabulary(ctx context.Context, raw json.RawMessage) (a
 	}
 	userID := mcpUser(ctx)
 	out := []map[string]any{}
-	for len(out) < limit {
+	for pages := 0; pages < 32 && len(out) < limit; pages++ {
 		page, err := m.s.St.VocabularyChanges(ctx, userID, since, limit-len(out), 1<<20)
 		if err != nil {
 			return nil, err

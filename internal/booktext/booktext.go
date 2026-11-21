@@ -45,13 +45,16 @@ type Chapter struct {
 
 // Book is a publication's text.
 type Book struct {
-	Chapters  []Chapter
-	Truncated bool
-	bytes     int
+	Chapters     []Chapter
+	Truncated    bool
+	bytes        int
+	unknownRange bool
 }
 
 // Bytes is the size of the text held.
 func (b *Book) Bytes() int { return b.bytes }
+
+func (b *Book) ProgressionKnown() bool { return !b.unknownRange }
 
 // Extract builds a book's text from its index. read returns the bytes
 // of one archive entry.
@@ -75,6 +78,10 @@ func Extract(ctx context.Context, idx *epub.Index, read func(name string) ([]byt
 		text, heading := htmlText(raw)
 		if b.bytes+len(text) > MaxBookBytes {
 			b.Truncated = true
+			end, ok := spans[href]
+			if !ok || len(b.Chapters) == 0 || b.Chapters[len(b.Chapters)-1].EndProg != end[0] {
+				b.unknownRange = true
+			}
 			break
 		}
 		title := titles[name]
@@ -101,6 +108,9 @@ func Extract(ctx context.Context, idx *epub.Index, read func(name string) ([]byt
 func (b *Book) fillSpans() {
 	for _, c := range b.Chapters {
 		if c.StartProg < 0 {
+			if b.Truncated {
+				b.unknownRange = true
+			}
 			goto fill
 		}
 	}

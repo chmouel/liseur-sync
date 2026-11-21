@@ -10,13 +10,36 @@ import (
 )
 
 func (s *Store) ListWorks(ctx context.Context, userID string) ([]store.WorkSummary, error) {
-	rows, err := s.db.QueryContext(ctx, q(
-		`SELECT w.id, w.user_id, w.title, w.author, w.pending, w.created_at,
+	return s.listWorks(ctx, userID, "")
+}
+
+func (s *Store) WorkSummaryByID(ctx context.Context, userID, workID string) (store.WorkSummary, error) {
+	if workID == "" {
+		return store.WorkSummary{}, store.ErrNotFound
+	}
+	works, err := s.listWorks(ctx, userID, workID)
+	if err != nil {
+		return store.WorkSummary{}, err
+	}
+	if len(works) == 0 {
+		return store.WorkSummary{}, store.ErrNotFound
+	}
+	return works[0], nil
+}
+
+func (s *Store) listWorks(ctx context.Context, userID, workID string) ([]store.WorkSummary, error) {
+	query := `SELECT w.id, w.user_id, w.title, w.author, w.pending, w.created_at,
 		        (SELECT progression FROM ops o WHERE o.user_id = w.user_id AND o.work_id = w.id
 		         AND o.kind = 'position' ORDER BY seq DESC LIMIT 1) AS head_prog,
 		        (SELECT MAX(received_at) FROM ops o WHERE o.user_id = w.user_id AND o.work_id = w.id) AS last_active
-		 FROM works w WHERE w.user_id = ?
-		 ORDER BY last_active DESC NULLS LAST, w.created_at DESC`), userID)
+		 FROM works w WHERE w.user_id = ?`
+	args := []any{userID}
+	if workID != "" {
+		query += ` AND w.id = ?`
+		args = append(args, workID)
+	}
+	query += ` ORDER BY last_active DESC NULLS LAST, w.created_at DESC`
+	rows, err := s.db.QueryContext(ctx, q(query), args...)
 	if err != nil {
 		return nil, err
 	}

@@ -1,10 +1,56 @@
 package booktext
 
 import (
+	"context"
 	"strings"
+
+	"github.com/chmouel/liseur-sync/internal/epub"
+	"github.com/readium/go-toolkit/pkg/manifest"
+	readiumurl "github.com/readium/go-toolkit/pkg/util/url"
 	"testing"
 	"unicode/utf8"
 )
+
+func TestExtractPreservesTruncatedProgression(t *testing.T) {
+	href := func(name string) manifest.HREF { return manifest.NewHREF(readiumurl.MustURLFromString(name)) }
+	first, second := href("one.xhtml"), href("two.xhtml")
+	idx := &epub.Index{Entries: map[string]epub.IndexEntry{"one.xhtml": {}, "two.xhtml": {}}}
+	idx.Manifest.ReadingOrder = manifest.LinkList{{Href: first}, {Href: second}}
+	start, end := 0.0, 0.4
+	idx.Positions = []manifest.Locator{{Href: readiumurl.MustURLFromString("one.xhtml")}, {Href: readiumurl.MustURLFromString("two.xhtml")}}
+	idx.Positions[0].Locations.TotalProgression = &start
+	idx.Positions[1].Locations.TotalProgression = &end
+	read := func(name string) ([]byte, error) {
+		if name == "one.xhtml" {
+			return []byte("<p>first chapter</p>"), nil
+		}
+		return []byte(strings.Repeat("x", MaxBookBytes)), nil
+	}
+	b, err := Extract(context.Background(), idx, read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !b.Truncated || b.Chapters[0].EndProg != 0.4 {
+		t.Fatalf("extraction: %+v", b)
+	}
+	if _, _, ok := b.AtProgression(0.2); !ok {
+		t.Fatal("retained progression rejected")
+	}
+	if _, _, ok := b.AtProgression(0.9); ok {
+		t.Fatal("unextracted progression accepted")
+	}
+	idx.Positions = nil
+	b, err = Extract(context.Background(), idx, read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.ProgressionKnown() {
+		t.Fatal("unknown truncated range advertised")
+	}
+	if _, _, ok := b.AtProgression(0.2); ok {
+		t.Fatal("unknown truncated range accepted")
+	}
+}
 
 func TestHTMLText(t *testing.T) {
 	doc := `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title><style>p{}</style></head>
@@ -171,7 +217,7 @@ func TestLocate(t *testing.T) {
 	if _, _, _, ok := b.Locate("missing.xhtml", nil, "", ""); ok {
 		t.Fatal("missing resource located")
 	}
-	if ch, _ := b.AtProgression(0.99); ch != 2 {
+	if ch, _, _ := b.AtProgression(0.99); ch != 2 {
 		t.Fatalf("AtProgression = %d", ch)
 	}
 }
