@@ -291,6 +291,12 @@ func testOAuthCodeExchangeIsOneTransaction(t *testing.T, open OpenFunc) {
 	if g, err := testExchangeCode(ctx, s, client, "code-mismatch", "grant-mismatch", "ok", now); err != nil || g.ID != "grant-mismatch" {
 		t.Fatalf("a mismatched request spent the code: %+v %v", g, err)
 	}
+	mkOAuthTestCode(t, s, client, "code-no-redirect", u.ID, now)
+	withoutRedirect := testRedemption(client, "code-no-redirect", "grant-no-redirect", "no-redirect", now)
+	withoutRedirect.RedirectURI = ""
+	if g, err := s.ExchangeOAuthCode(ctx, withoutRedirect, now); err != nil || g.ID != "grant-no-redirect" {
+		t.Fatalf("exchange without redirect URI: %+v %v", g, err)
+	}
 
 	// A replay after a completed exchange revokes the grant.
 	mkOAuthTestCode(t, s, client, "code-replay", u.ID, now)

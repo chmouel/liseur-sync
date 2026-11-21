@@ -115,7 +115,7 @@ func (s *Store) ExchangeOAuthCode(ctx context.Context, r store.OAuthCodeRedempti
 	if err != nil {
 		return store.OAuthGrant{}, err
 	}
-	if clientID != r.ClientID || redirectURI != r.RedirectURI || challenge != r.CodeChallenge ||
+	if clientID != r.ClientID || (r.RedirectURI != "" && redirectURI != r.RedirectURI) || challenge != r.CodeChallenge ||
 		(r.Resource != "" && r.Resource != resource) {
 		return store.OAuthGrant{}, store.ErrNotFound
 	}

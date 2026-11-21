@@ -196,6 +196,16 @@ func TestCodeFlowAndRefreshRotation(t *testing.T) {
 	}
 }
 
+func TestCodeExchangeWithoutRedirectURI(t *testing.T) {
+	f := newFixture(t)
+	code := f.code(t, "lsc_public")
+	form := exchange(code, "lsc_public")
+	form.Del("redirect_uri")
+	if status, body := f.token(form); status != http.StatusOK || body["access_token"] == nil {
+		t.Fatalf("exchange without redirect_uri: %d %v", status, body)
+	}
+}
+
 func TestExchangeRejects(t *testing.T) {
 	f := newFixture(t)
 	cases := map[string]func(url.Values) url.Values{
