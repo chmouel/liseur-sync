@@ -34,7 +34,7 @@ import (
 //
 // The front door is the one pattern that proves nothing: /ui/ matches
 // every unclaimed path under it and the handler 404s all but its own.
-const frontDoorPattern = "GET /ui/"
+const frontDoorPattern = "GET /ui/{$}"
 
 var (
 	uiLinkAttr = regexp.MustCompile(
