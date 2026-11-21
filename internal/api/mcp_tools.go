@@ -494,11 +494,7 @@ func (m *mcpService) works(ctx context.Context, userID string) ([]store.WorkSumm
 	if err != nil {
 		return nil, nil, err
 	}
-	ids := make([]string, len(list))
-	for i, w := range list {
-		ids[i] = w.Work.ID
-	}
-	readings, err := m.s.St.WorkReadings(ctx, userID, ids)
+	readings, err := m.s.St.WorkReadings(ctx, userID, nil)
 	if err != nil {
 		return nil, nil, err
 	}
