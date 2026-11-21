@@ -771,6 +771,7 @@ type mcpWorkStats struct {
 	CurrentProgression *float64        `json:"current_progression,omitempty"`
 	Status             *reading.Status `json:"status,omitempty"`
 	ETASeconds         **float64       `json:"eta_seconds,omitempty"`
+	CoversNarrative    *bool           `json:"covers_narrative,omitempty"`
 }
 
 func scopedWorkStats(work insights.Work, readingAllowed bool) mcpWorkStats {
@@ -779,6 +780,7 @@ func scopedWorkStats(work insights.Work, readingAllowed bool) mcpWorkStats {
 		out.CurrentProgression = &work.CurrentProgression
 		out.Status = &work.Status
 		out.ETASeconds = &work.ETASeconds
+		out.CoversNarrative = &work.CoversNarrative
 	}
 	return out
 }
