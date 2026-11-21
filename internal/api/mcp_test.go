@@ -298,6 +298,39 @@ func TestMCPCalendarReportsSnapshotRevision(t *testing.T) {
 	}
 }
 
+func TestMCPVocabularyRespectsLimitAcrossFilteredPages(t *testing.T) {
+	f := newFolderFixture(t)
+	f.enableMCP(t, nil)
+	now := time.Now().UTC()
+	words := []store.VocabularyWordWrite{
+		{Language: "fr", Normalized: "bonjour", Word: "bonjour", AddedAt: now, OccurrencesJSON: []byte("[]")},
+		{Language: "en", Normalized: "one", Word: "one", AddedAt: now, OccurrencesJSON: []byte("[]")},
+		{Language: "en", Normalized: "two", Word: "two", AddedAt: now, OccurrencesJSON: []byte("[]")},
+		{Language: "en", Normalized: "three", Word: "three", AddedAt: now, OccurrencesJSON: []byte("[]")},
+	}
+	results, err := f.st.PushVocabularyWords(t.Context(), f.user.ID, "device", words, 50000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range results {
+		if result.Status != "applied" {
+			t.Fatalf("vocabulary write: %+v", result)
+		}
+	}
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeVocabulary)
+	first := f.mustCall(t, access, "list_vocabulary", map[string]any{"language": "en", "limit": 2})
+	got := first["words"].([]any)
+	cursor, ok := first["next_cursor"].(string)
+	if len(got) != 2 || !ok || got[0].(map[string]any)["word"] != "one" || got[1].(map[string]any)["word"] != "two" {
+		t.Fatalf("first page: %v", first)
+	}
+	second := f.mustCall(t, access, "list_vocabulary", map[string]any{"language": "en", "limit": 2, "cursor": cursor})
+	got = second["words"].([]any)
+	if len(got) != 1 || got[0].(map[string]any)["word"] != "three" || second["next_cursor"] != nil {
+		t.Fatalf("second page: %v", second)
+	}
+}
+
 func TestMCPReadsOnlyTheGrantedLibrary(t *testing.T) {
 	f := newFolderFixture(t)
 	f.enableMCP(t, nil)
