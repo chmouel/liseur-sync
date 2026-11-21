@@ -2085,6 +2085,9 @@ That document names the authorization server, whose metadata is at
 each tool returns `structuredContent` alongside its text. Every tool is
 read-only.
 
+`get_reading_calendar` returns a decimal-string `stats_revision`; combine
+calendar chunks only when their revisions and timezones match.
+
 The text tools read the same EPUB the reader has. `read_at` takes the
 reader's own place (`at: "current"` or `"furthest"`, which also needs
 `mcp:reading`), a `progression`, or an `annotation_id`, and reports in

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -268,6 +269,31 @@ func TestMCPWorkStatsRespectReadingScope(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMCPCalendarReportsSnapshotRevision(t *testing.T) {
+	f := newFolderFixture(t)
+	f.enableMCP(t, nil)
+	bookID, _ := f.writeBook(t, "moby.epub", chapterEPUB(t))
+	_, resolved := f.resolveBook(t, bookID, f.token)
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeInsights)
+	first := f.mustCall(t, access, "get_reading_calendar", map[string]any{"from": "2024-01-01", "to": "2024-01-31"})
+	second := f.mustCall(t, access, "get_reading_calendar", map[string]any{"from": "2024-02-01", "to": "2024-02-29"})
+	revision, ok := first["stats_revision"].(string)
+	if _, err := strconv.ParseInt(revision, 10, 64); !ok || err != nil || revision != second["stats_revision"] || first["timezone"] != second["timezone"] {
+		t.Fatalf("calendar snapshots: %v, %v", first, second)
+	}
+	start := time.Date(2024, 1, 2, 12, 0, 0, 0, time.UTC)
+	if err := f.st.AppendSessions(t.Context(), f.user.ID, []store.Session{{
+		UserID: f.user.ID, SessionID: "calendar-session", WorkID: resolved.WorkID, DeviceID: "device",
+		StartedAt: start, EndedAt: start.Add(time.Hour), StartProg: 0.1, EndProg: 0.4, Origin: store.OriginNative,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	changed := f.mustCall(t, access, "get_reading_calendar", map[string]any{"from": "2024-01-01", "to": "2024-01-31"})
+	if changed["stats_revision"] == revision || len(changed["days"].([]any)) != 1 {
+		t.Fatalf("changed calendar: %v", changed)
 	}
 }
 
