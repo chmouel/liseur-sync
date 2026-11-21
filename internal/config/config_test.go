@@ -90,7 +90,7 @@ func TestWebSessionLifetimeDefaultsAndValidation(t *testing.T) {
 }
 
 func TestMCPPublicURLIsBareOrigin(t *testing.T) {
-	for _, value := range []string{"https://:443", "https://books.example?", "https://books.example#", "https://books.example?x=1", "https://books.example#x", "https://books.example:0", "https://books.example:65536", "https://books.example:99999999999999", "https://books.example:", "https://[books.example]", "https://2001:db8::1:443"} {
+	for _, value := range []string{"https://:443", "https://books.example?", "https://books.example#", "https://books.example?x=1", "https://books.example#x", "https://books.example:0", "https://books.example:65536", "https://books.example:99999999999999", "https://books.example:", "https://[books.example]", "https://2001:db8::1:443", "https://127.1", "https://2130706433", "https://0x7f000001", "https://[fe80::1%25eth0]"} {
 		cfg := Default()
 		cfg.MCP.Enabled = true
 		cfg.MCP.PublicURL = value
@@ -98,7 +98,7 @@ func TestMCPPublicURLIsBareOrigin(t *testing.T) {
 			t.Errorf("accepted %q", value)
 		}
 	}
-	for _, value := range []string{"https://books.example", "https://books.example/", "https://books.example:443", "https://books.example:65535", "https://[2001:db8::1]:443"} {
+	for _, value := range []string{"https://books.example", "https://books.example/", "https://books.example:443", "https://books.example:65535", "https://books_internal.example", "https://127.0.0.1", "https://[2001:db8::1]:443", "https://b%C3%BCcher.example:443"} {
 		cfg := Default()
 		cfg.MCP.Enabled = true
 		cfg.MCP.PublicURL = value

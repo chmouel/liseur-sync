@@ -19,6 +19,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/chmouel/liseur-sync/internal/weborigin"
 )
 
 // Protocol versions this server speaks, newest first.
@@ -224,13 +226,9 @@ func sameOrigin(origin, want string) bool {
 	if err != nil || !bareOrigin(w) || !strings.EqualFold(o.Scheme, w.Scheme) {
 		return false
 	}
-	oHost, wHost := o.Hostname(), w.Hostname()
-	if oIP, err := netip.ParseAddr(oHost); err == nil {
-		wIP, err := netip.ParseAddr(wHost)
-		if err != nil || oIP != wIP {
-			return false
-		}
-	} else if !strings.EqualFold(oHost, wHost) {
+	oHost, oValid := weborigin.Host(o.Hostname())
+	wHost, wValid := weborigin.Host(w.Hostname())
+	if !oValid || !wValid || !strings.EqualFold(oHost, wHost) {
 		return false
 	}
 	oPort, oOK := originPort(o)

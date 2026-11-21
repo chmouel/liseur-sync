@@ -18,7 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"golang.org/x/net/idna"
+	"github.com/chmouel/liseur-sync/internal/weborigin"
 )
 
 // ChatGPTMetadataURL is the Client ID Metadata Document ChatGPT
@@ -333,7 +333,10 @@ func RedirectOrigin(raw string) (string, error) {
 	if err != nil || !utf8.ValidString(raw) || u.Host == "" || u.Hostname() == "" || u.Fragment != "" || u.User != nil || u.String() != raw {
 		return "", fmt.Errorf("redirect URI %q is not a plain absolute URL", raw)
 	}
-	host := u.Hostname()
+	host, ok := weborigin.Host(u.Hostname())
+	if !ok || strings.Contains(host, "_") {
+		return "", fmt.Errorf("redirect URI %q has an invalid host", raw)
+	}
 	ip, ipErr := netip.ParseAddr(host)
 	if strings.HasPrefix(u.Host, "[") {
 		if ipErr != nil || !ip.Is6() || ip.Zone() != "" {
@@ -362,17 +365,6 @@ func RedirectOrigin(raw string) (string, error) {
 	}
 	if ipErr == nil && ip.Is6() {
 		host = "[" + ip.String() + "]"
-	} else {
-		host, err = idna.Lookup.ToASCII(host)
-		if err != nil || host == "" {
-			return "", fmt.Errorf("redirect URI %q has an invalid host", raw)
-		}
-		for _, c := range host {
-			ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-'
-			if !ok {
-				return "", fmt.Errorf("redirect URI %q has an invalid host", raw)
-			}
-		}
 	}
 	if port != "" {
 		host += ":" + port

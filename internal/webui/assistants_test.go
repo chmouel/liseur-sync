@@ -234,6 +234,8 @@ func TestOAuthRedirectOrigin(t *testing.T) {
 		"https://client.example:65536/cb":     "",
 		"https://client.example:/cb":          "",
 		"https://[fe80::1%25eth0]/cb":         "",
+		"https://127.1/cb":                    "",
+		"https://0x7f000001/cb":               "",
 	} {
 		err := oauth.ValidateRedirectURI(raw)
 		if got := cspOrigin(raw); got != want || (err == nil) != (want != "") {
