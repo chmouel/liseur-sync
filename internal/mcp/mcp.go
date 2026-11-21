@@ -135,12 +135,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Error: &rpcError{Code: codeParse, Message: "parse error"}})
 		return
 	}
-	if req.JSONRPC != "2.0" || req.Method == "" {
-		writeRPC(w, http.StatusBadRequest, response{JSONRPC: "2.0", ID: idOrNull(req.ID),
+	validID := len(req.ID) == 0 || validRequestID(req.ID)
+	if req.JSONRPC != "2.0" || req.Method == "" || !validID {
+		id := json.RawMessage("null")
+		if validID && len(req.ID) > 0 {
+			id = req.ID
+		}
+		writeRPC(w, http.StatusBadRequest, response{JSONRPC: "2.0", ID: id,
 			Error: &rpcError{Code: codeInvalidRequest, Message: "invalid request"}})
 		return
 	}
-	if len(req.ID) == 0 || string(req.ID) == "null" {
+	if len(req.ID) == 0 {
 		// A notification (or a client's response, which this server never
 		// asks for) is acknowledged and otherwise ignored.
 		w.WriteHeader(http.StatusAccepted)
@@ -156,11 +161,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeRPC(w, http.StatusOK, resp)
 }
 
-func idOrNull(id json.RawMessage) json.RawMessage {
+func validRequestID(id json.RawMessage) bool {
 	if len(id) == 0 {
-		return json.RawMessage("null")
+		return false
 	}
-	return id
+	if id[0] == '"' {
+		return true
+	}
+	return (id[0] == '-' || id[0] >= '0' && id[0] <= '9') && !bytes.ContainsAny(id, ".eE")
 }
 
 func writeRPC(w http.ResponseWriter, status int, resp response) {

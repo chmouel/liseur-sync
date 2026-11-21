@@ -83,6 +83,32 @@ func TestTransportRefusals(t *testing.T) {
 	}
 }
 
+func TestRequestIDs(t *testing.T) {
+	calls := 0
+	s := New("test", "https://sync.example", func(context.Context) []string { return []string{"a"} }, []Tool{{
+		Name: "count", Scope: "a", Call: func(context.Context, json.RawMessage) (any, error) { calls++; return map[string]any{}, nil },
+	}})
+	for _, id := range []string{"null", "true", "false", "{}", "[]", "1.5"} {
+		w, out := post(t, s, `{"jsonrpc":"2.0","id":`+id+`,"method":"tools/call","params":{"name":"count"}}`)
+		if w.Code != http.StatusBadRequest || out["id"] != nil || out["error"].(map[string]any)["code"] != float64(codeInvalidRequest) || calls != 0 {
+			t.Fatalf("invalid id %s: status %d, response %v, calls %d", id, w.Code, out, calls)
+		}
+	}
+	for _, id := range []string{`"client-id"`, "-1", "0", "123456789012345678901234567890"} {
+		w, _ := post(t, s, `{"jsonrpc":"2.0","id":`+id+`,"method":"tools/call","params":{"name":"count"}}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("valid id %s: %d %s", id, w.Code, w.Body.String())
+		}
+	}
+	if calls != 4 {
+		t.Fatalf("calls: %d", calls)
+	}
+	w, _ := post(t, s, `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"count"}}`)
+	if w.Code != http.StatusAccepted || calls != 4 {
+		t.Fatalf("notification: %d, calls %d", w.Code, calls)
+	}
+}
+
 func TestInitializeNegotiates(t *testing.T) {
 	s := testServer()
 	_, out := post(t, s, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`)
