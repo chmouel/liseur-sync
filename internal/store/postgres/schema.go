@@ -1075,6 +1075,11 @@ CREATE INDEX oauth_tokens_grant ON oauth_tokens(grant_id);
 `
 
 // migrations is append-only, for the reason the SQLite copy gives.
+const oauthClientGenerations = `
+ALTER TABLE oauth_clients ADD COLUMN generation TEXT NOT NULL DEFAULT '';
+UPDATE oauth_clients SET generation = gen_random_uuid()::text;
+`
+
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
 	folderBackfill, statisticsStorage, comparisonRollupEvidence,
@@ -1096,6 +1101,7 @@ var migrations = []string{
 	workMetadataOverrides,
 	vocabularySync,
 	oauthAssistants,
+	oauthClientGenerations,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1128,6 +1134,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"workMetadataOverrides":    workMetadataOverrides,
 		"vocabularySync":           vocabularySync,
 		"oauthAssistants":          oauthAssistants,
+		"oauthClientGenerations":   oauthClientGenerations,
 	}
 	want, ok := named[name]
 	if !ok {

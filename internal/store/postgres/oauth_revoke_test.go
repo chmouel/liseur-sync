@@ -33,10 +33,11 @@ func TestRevokeAllDuringOAuthExchange(t *testing.T) {
 	if err := s.CreateOAuthClient(ctx, client); err != nil {
 		t.Fatal(err)
 	}
-	code := store.OAuthCode{SHA256: "code", UserID: u.ID, ClientID: client.ID, ClientName: client.Name,
+	client.Generation = storetest.MkOAuthClientGeneration(t, s, client.ID)
+	code := store.OAuthCode{SHA256: "code", UserID: u.ID, ClientID: client.ID, ClientGeneration: client.Generation, ClientName: client.Name,
 		RedirectURI: "https://client.example/cb", CodeChallenge: "challenge", Resource: "resource",
 		Scopes: []string{"mcp:library"}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}
-	if err := s.CreateOAuthCode(ctx, code); err != nil {
+	if err := s.CreateOAuthCode(ctx, code, storetest.MkOAuthSession(t, s, u.ID, "code", now)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -116,7 +117,8 @@ func TestHousekeepDuringOAuthRefreshRotation(t *testing.T) {
 	if err := s.CreateOAuthClient(ctx, client); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateOAuthCode(ctx, store.OAuthCode{SHA256: "code", UserID: u.ID, ClientID: client.ID, ClientName: client.Name, RedirectURI: "https://client.example/cb", CodeChallenge: "challenge", Resource: "resource", Scopes: []string{"mcp:library"}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}); err != nil {
+	client.Generation = storetest.MkOAuthClientGeneration(t, s, client.ID)
+	if err := s.CreateOAuthCode(ctx, store.OAuthCode{SHA256: "code", UserID: u.ID, ClientID: client.ID, ClientGeneration: client.Generation, ClientName: client.Name, RedirectURI: "https://client.example/cb", CodeChallenge: "challenge", Resource: "resource", Scopes: []string{"mcp:library"}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}, storetest.MkOAuthSession(t, s, u.ID, "code", now)); err != nil {
 		t.Fatal(err)
 	}
 	tokens := func(prefix string, at time.Time) []store.OAuthToken {
@@ -224,7 +226,8 @@ func TestOAuthRefreshReuseAfterGrantLockWait(t *testing.T) {
 	if err := s.CreateOAuthClient(ctx, client); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateOAuthCode(ctx, store.OAuthCode{SHA256: "code", UserID: u.ID, ClientID: client.ID, ClientName: client.Name, RedirectURI: "https://client.example/cb", CodeChallenge: "challenge", Resource: "resource", Scopes: []string{"mcp:library"}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}); err != nil {
+	client.Generation = storetest.MkOAuthClientGeneration(t, s, client.ID)
+	if err := s.CreateOAuthCode(ctx, store.OAuthCode{SHA256: "code", UserID: u.ID, ClientID: client.ID, ClientGeneration: client.Generation, ClientName: client.Name, RedirectURI: "https://client.example/cb", CodeChallenge: "challenge", Resource: "resource", Scopes: []string{"mcp:library"}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}, storetest.MkOAuthSession(t, s, u.ID, "code", now)); err != nil {
 		t.Fatal(err)
 	}
 	tokens := []store.OAuthToken{
@@ -278,5 +281,185 @@ func TestOAuthRefreshReuseAfterGrantLockWait(t *testing.T) {
 	}
 	if err := <-done; !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("replayed refresh after lock wait: %v", err)
+	}
+}
+
+func TestOAuthConsentAgainstConcurrentRevocation(t *testing.T) {
+	dsn := os.Getenv("LISEUR_PG_TEST_DSN")
+	if dsn == "" {
+		t.Skip("LISEUR_PG_TEST_DSN not set")
+	}
+	s, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	reset(t, s)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	u := storetest.MkUser(t, s, "oauth-consent-race")
+	now := time.Now().UTC()
+	client := store.OAuthClient{ID: "client", Kind: store.OAuthClientRegistered, Name: "client", CreatedAt: now}
+	if err := s.CreateOAuthClient(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	client.Generation = storetest.MkOAuthClientGeneration(t, s, client.ID)
+	code := store.OAuthCode{SHA256: "after", UserID: u.ID, ClientID: client.ID, ClientGeneration: client.Generation, ClientName: client.Name, RedirectURI: "https://client.example/cb", CodeChallenge: "challenge", Resource: "resource", Scopes: []string{"mcp:library"}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}
+	firstSession := storetest.MkOAuthSession(t, s, u.ID, "first", now)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var pid int
+	if err := tx.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE auth_sessions SET revoked_at = $1 WHERE id = $2`, now, firstSession); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.CreateOAuthCode(ctx, code, firstSession) }()
+	for {
+		var blocked bool
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%SELECT expires_at FROM auth_sessions%' AND $1 = ANY(pg_blocking_pids(pid)))`, pid).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("consent did not wait: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("consent after revocation: %v", err)
+	}
+
+	secondSession := storetest.MkOAuthSession(t, s, u.ID, "second", now)
+	tx, err = s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := tx.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE`, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT id FROM auth_sessions WHERE id = $1 FOR UPDATE`, secondSession); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO oauth_codes (sha256,user_id,client_id,client_name,redirect_uri,code_challenge,resource,scopes,created_at,expires_at) VALUES ('before',$1,$2,$2,$3,'challenge','resource','mcp:library',$4,$5)`, u.ID, client.ID, code.RedirectURI, now, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	done = make(chan error, 1)
+	go func() { done <- s.RevokeAllUserCredentials(ctx, u.ID, now) }()
+	for {
+		var blocked bool
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%UPDATE auth_sessions SET revoked_at%' AND $1 = ANY(pg_blocking_pids(pid)))`, pid).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("revocation did not wait: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.ExchangeOAuthCode(ctx, store.OAuthCodeRedemption{SHA256: "before", ClientID: client.ID, RedirectURI: code.RedirectURI, CodeChallenge: code.CodeChallenge, Resource: code.Resource, GrantID: "grant"}, now)
+	if !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("code before revocation: %v", err)
+	}
+}
+
+func TestOAuthConsentSessionExpiresWaitingForClient(t *testing.T) {
+	dsn := os.Getenv("LISEUR_PG_TEST_DSN")
+	if dsn == "" {
+		t.Skip("LISEUR_PG_TEST_DSN not set")
+	}
+	s, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	reset(t, s)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	u := storetest.MkUser(t, s, "oauth-consent-expiry")
+	now := time.Now().UTC()
+	client := store.OAuthClient{ID: "client", Kind: store.OAuthClientRegistered, Name: "client", CreatedAt: now}
+	if err := s.CreateOAuthClient(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	client.Generation = storetest.MkOAuthClientGeneration(t, s, client.ID)
+	sessionID := "expiring-session"
+	expires := time.Now().UTC().Add(2 * time.Second)
+	if err := s.CreateAuthSession(ctx, store.AuthSession{ID: sessionID, UserID: u.ID, SHA256: "session-hash", Kind: "web", CreatedAt: now, ExpiresAt: expires}); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var pid int
+	if err := tx.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT id FROM oauth_clients WHERE id = 'client' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	code := store.OAuthCode{SHA256: "code", UserID: u.ID, ClientID: client.ID, ClientGeneration: client.Generation, ClientName: client.Name, RedirectURI: "https://client.example/cb", CodeChallenge: "challenge", Resource: "resource", Scopes: []string{"mcp:library"}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}
+	done := make(chan error, 1)
+	go func() { done <- s.CreateOAuthCode(ctx, code, sessionID) }()
+	for {
+		var blocked bool
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%SELECT 1 FROM oauth_clients%' AND $1 = ANY(pg_blocking_pids(pid)))`, pid).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("consent did not wait: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if wait := time.Until(expires.Add(20 * time.Millisecond)); wait > 0 {
+		time.Sleep(wait)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expired consent: %v", err)
 	}
 }

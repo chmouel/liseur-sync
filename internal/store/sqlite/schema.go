@@ -1508,6 +1508,11 @@ CREATE TABLE oauth_tokens (
 CREATE INDEX oauth_tokens_grant ON oauth_tokens(grant_id);
 `
 
+const oauthClientGenerations = `
+ALTER TABLE oauth_clients ADD COLUMN generation TEXT NOT NULL DEFAULT '';
+UPDATE oauth_clients SET generation = lower(hex(randomblob(16)));
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
@@ -1532,6 +1537,7 @@ var migrations = []string{
 	workMetadataOverrides,
 	vocabularySync,
 	oauthAssistants,
+	oauthClientGenerations,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1565,6 +1571,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"workMetadataOverrides":    workMetadataOverrides,
 		"vocabularySync":           vocabularySync,
 		"oauthAssistants":          oauthAssistants,
+		"oauthClientGenerations":   oauthClientGenerations,
 	}
 	want, ok := named[name]
 	if !ok {

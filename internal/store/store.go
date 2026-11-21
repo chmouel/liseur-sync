@@ -124,6 +124,7 @@ const OAuthTouchInterval = 5 * time.Minute
 
 type OAuthClient struct {
 	ID           string
+	Generation   string
 	Kind         string
 	Name         string
 	RedirectURIs []string
@@ -133,16 +134,17 @@ type OAuthClient struct {
 }
 
 type OAuthCode struct {
-	SHA256        string
-	UserID        string
-	ClientID      string
-	ClientName    string
-	RedirectURI   string
-	CodeChallenge string
-	Resource      string
-	Scopes        []string
-	CreatedAt     time.Time
-	ExpiresAt     time.Time
+	SHA256           string
+	UserID           string
+	ClientID         string
+	ClientGeneration string
+	ClientName       string
+	RedirectURI      string
+	CodeChallenge    string
+	Resource         string
+	Scopes           []string
+	CreatedAt        time.Time
+	ExpiresAt        time.Time
 }
 
 // OAuthCodeRedemption is a token request against an authorization code.
@@ -2643,7 +2645,7 @@ type Store interface {
 	// DeleteOAuthClient removes a client and, by cascade, every grant
 	// and token issued to it.
 	DeleteOAuthClient(ctx context.Context, id string) error
-	CreateOAuthCode(ctx context.Context, c OAuthCode) error
+	CreateOAuthCode(ctx context.Context, c OAuthCode, sessionID string) error
 	// ExchangeOAuthCode spends an authorization code and stores the
 	// grant, its first access and refresh tokens and the code's
 	// back-reference to it, all in one transaction. An unknown, expired

@@ -172,7 +172,11 @@ func (s *Server) handleOAuthDecision(w http.ResponseWriter, r *http.Request, a s
 	}
 	target := s.OAuth.Deny(req)
 	if r.PostForm.Get("decision") == "allow" {
-		target, err = s.OAuth.Approve(r.Context(), req, u.ID, r.PostForm["grant"])
+		target, err = s.OAuth.Approve(r.Context(), req, u.ID, a.ID, r.PostForm["grant"])
+		if errors.Is(err, store.ErrNotFound) {
+			http.Error(w, "authorization expired; connect again", http.StatusUnauthorized)
+			return
+		}
 		if err != nil {
 			slog.ErrorContext(r.Context(), "oauth approve failed", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)

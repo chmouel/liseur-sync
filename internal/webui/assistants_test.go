@@ -252,13 +252,21 @@ func TestConnectedAssistantsAreTheReadersOwn(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
+	client, err := st.OAuthClient(t.Context(), "lsc_test")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, owner := range []string{"u1", "u2"} {
+		sessionID := "oauth-fixture-" + owner
+		if err := st.CreateAuthSession(t.Context(), store.AuthSession{ID: sessionID, UserID: owner, SHA256: "hash-" + sessionID, Kind: "web", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
 		if err := st.CreateOAuthCode(t.Context(), store.OAuthCode{
-			SHA256: "code-" + owner, UserID: owner, ClientID: "lsc_test", ClientName: "Test Assistant",
+			SHA256: "code-" + owner, UserID: owner, ClientID: "lsc_test", ClientGeneration: client.Generation, ClientName: "Test Assistant",
 			RedirectURI: consentRedirect, CodeChallenge: strings.Repeat("A", 43),
 			Resource: "https://books.example/mcp", Scopes: []string{"mcp:library"},
 			CreatedAt: now, ExpiresAt: now.Add(time.Minute),
-		}); err != nil {
+		}, sessionID); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := st.ExchangeOAuthCode(t.Context(), store.OAuthCodeRedemption{

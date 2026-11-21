@@ -18,6 +18,24 @@ const (
 	testOAuthChallenge = "challenge"
 )
 
+func MkOAuthClientGeneration(t *testing.T, s store.Store, id string) string {
+	t.Helper()
+	client, err := s.OAuthClient(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client.Generation
+}
+
+func MkOAuthSession(t *testing.T, s store.Store, userID, tag string, now time.Time) string {
+	t.Helper()
+	id := "oauth-session-" + userID + "-" + tag
+	if err := s.CreateAuthSession(t.Context(), store.AuthSession{ID: id, UserID: userID, SHA256: "hash-" + id, Kind: "web", CreatedAt: now, ExpiresAt: time.Date(9999, time.December, 31, 0, 0, 0, 0, time.UTC)}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 // testOAuth covers the assistant endpoint's credentials (ADR-0069): a
 // code is spent once and a replay revokes what it produced, a refresh
 // token rotates and its reuse revokes the grant, and nothing survives a
@@ -59,14 +77,16 @@ func testOAuth(t *testing.T, open OpenFunc) {
 		t.Fatalf("unknown client: %v", err)
 	}
 
+	client.Generation = MkOAuthClientGeneration(t, s, client.ID)
 	code := func(sha, user string) {
 		t.Helper()
+		sessionID := MkOAuthSession(t, s, user, sha, now)
 		if err := s.CreateOAuthCode(ctx, store.OAuthCode{
-			SHA256: sha, UserID: user, ClientID: client.ID, ClientName: "Example",
+			SHA256: sha, UserID: user, ClientID: client.ID, ClientGeneration: client.Generation, ClientName: "Example",
 			RedirectURI: testOAuthRedirect, CodeChallenge: testOAuthChallenge,
 			Resource: testOAuthResource, Scopes: []string{"mcp:library", "mcp:text"},
 			CreatedAt: now, ExpiresAt: now.Add(time.Minute),
-		}); err != nil {
+		}, sessionID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -231,6 +251,58 @@ func testOAuth(t *testing.T, open OpenFunc) {
 	}
 }
 
+func testOAuthConsentSessionRevocation(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := t.Context()
+	u := MkUser(t, s, "oauth-consent-session")
+	other := MkUser(t, s, "oauth-consent-other")
+	now := time.Now().UTC()
+	client := mkOAuthTestClient(t, s, now)
+	sessionID := MkOAuthSession(t, s, u.ID, "consent", now)
+	otherSession := MkOAuthSession(t, s, other.ID, "other", now)
+	code := store.OAuthCode{SHA256: "before", UserID: u.ID, ClientID: client.ID, ClientGeneration: client.Generation, ClientName: client.Name, RedirectURI: testOAuthRedirect, CodeChallenge: testOAuthChallenge, Resource: testOAuthResource, Scopes: []string{"mcp:library"}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}
+	if err := s.CreateOAuthCode(ctx, code, otherSession); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("other session: %v", err)
+	}
+	if err := s.DeleteOAuthClient(ctx, client.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateOAuthClient(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	generation := MkOAuthClientGeneration(t, s, client.ID)
+	if generation == client.Generation {
+		t.Fatal("client registration generation was reused")
+	}
+	if err := s.CreateOAuthCode(ctx, code, sessionID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("old client registration: %v", err)
+	}
+	code.ClientGeneration = generation
+	expired := store.AuthSession{ID: "expired", UserID: u.ID, SHA256: "expired-hash", Kind: "web", CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(-time.Minute)}
+	if err := s.CreateAuthSession(ctx, expired); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateOAuthCode(ctx, code, expired.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expired session: %v", err)
+	}
+	if err := s.CreateOAuthCode(ctx, code, sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RevokeAllUserCredentials(ctx, u.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testExchangeCode(ctx, s, client, code.SHA256, "grant", "token", now); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("code before revocation: %v", err)
+	}
+	code.SHA256 = "after"
+	if err := s.CreateOAuthCode(ctx, code, sessionID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("code after revocation: %v", err)
+	}
+	if _, err := testExchangeCode(ctx, s, client, code.SHA256, "grant", "token", now); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("code created after revocation: %v", err)
+	}
+}
+
 func testOAuthReplayAfterHousekeep(t *testing.T, open OpenFunc) {
 	s := open(t)
 	ctx := t.Context()
@@ -240,7 +312,8 @@ func testOAuthReplayAfterHousekeep(t *testing.T, open OpenFunc) {
 	if err := s.CreateOAuthClient(ctx, client); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateOAuthCode(ctx, store.OAuthCode{SHA256: "code", UserID: u.ID, ClientID: client.ID, ClientName: client.Name, RedirectURI: testOAuthRedirect, CodeChallenge: testOAuthChallenge, Resource: testOAuthResource, Scopes: []string{"mcp:text"}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}); err != nil {
+	client.Generation = MkOAuthClientGeneration(t, s, client.ID)
+	if err := s.CreateOAuthCode(ctx, store.OAuthCode{SHA256: "code", UserID: u.ID, ClientID: client.ID, ClientGeneration: client.Generation, ClientName: client.Name, RedirectURI: testOAuthRedirect, CodeChallenge: testOAuthChallenge, Resource: testOAuthResource, Scopes: []string{"mcp:text"}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}, MkOAuthSession(t, s, u.ID, "code", now)); err != nil {
 		t.Fatal(err)
 	}
 	newTokens := func(prefix string, at time.Time) []store.OAuthToken {
@@ -486,17 +559,19 @@ func mkOAuthTestClient(t *testing.T, s store.Store, now time.Time) store.OAuthCl
 	if err := s.CreateOAuthClient(context.Background(), c); err != nil {
 		t.Fatal(err)
 	}
+	c.Generation = MkOAuthClientGeneration(t, s, c.ID)
 	return c
 }
 
 func mkOAuthTestCode(t *testing.T, s store.Store, client store.OAuthClient, sha, user string, now time.Time) {
 	t.Helper()
+	sessionID := MkOAuthSession(t, s, user, sha, now)
 	if err := s.CreateOAuthCode(context.Background(), store.OAuthCode{
-		SHA256: sha, UserID: user, ClientID: client.ID, ClientName: client.Name,
+		SHA256: sha, UserID: user, ClientID: client.ID, ClientGeneration: client.Generation, ClientName: client.Name,
 		RedirectURI: testOAuthRedirect, CodeChallenge: testOAuthChallenge,
 		Resource: testOAuthResource, Scopes: []string{"mcp:library", "mcp:text"},
 		CreatedAt: now, ExpiresAt: now.Add(time.Minute),
-	}); err != nil {
+	}, sessionID); err != nil {
 		t.Fatal(err)
 	}
 }

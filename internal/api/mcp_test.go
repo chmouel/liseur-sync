@@ -74,7 +74,12 @@ func (f *folderFixture) assistantToken(t *testing.T, userID string, scopes ...st
 	if err != nil {
 		t.Fatal(err)
 	}
-	to, err := f.srv.OAuth.Approve(t.Context(), req, userID, scopes)
+	sessionID := store.NewID()
+	now := time.Now().UTC()
+	if err := f.st.CreateAuthSession(t.Context(), store.AuthSession{ID: sessionID, UserID: userID, SHA256: "hash-" + sessionID, Kind: "web", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	to, err := f.srv.OAuth.Approve(t.Context(), req, userID, sessionID, scopes)
 	if err != nil {
 		t.Fatal(err)
 	}

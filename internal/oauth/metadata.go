@@ -52,9 +52,23 @@ type MetadataFetcher struct {
 	Client *http.Client
 	now    func() time.Time
 
-	mu    sync.Mutex
-	cache map[string]cachedMetadata
+	mu      sync.Mutex
+	cache   map[metadataKey]cachedMetadata
+	loading map[metadataKey]*metadataLoad
 }
+
+type metadataKey struct {
+	url, generation string
+}
+
+type metadataLoad struct {
+	done  chan struct{}
+	doc   ClientMetadata
+	err   error
+	retry bool
+}
+
+var errMetadataInvalidated = errors.New("client metadata was invalidated during fetch")
 
 type cachedMetadata struct {
 	doc     ClientMetadata
@@ -78,8 +92,9 @@ func NewMetadataFetcher() *MetadataFetcher {
 			Timeout:       metadataTimeout,
 			CheckRedirect: refuseRedirect,
 		},
-		now:   time.Now,
-		cache: map[string]cachedMetadata{},
+		now:     time.Now,
+		cache:   map[metadataKey]cachedMetadata{},
+		loading: map[metadataKey]*metadataLoad{},
 	}
 }
 
@@ -138,7 +153,7 @@ func PublicAddr(ip netip.Addr) bool {
 func ValidateMetadataURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil ||
-		u.Fragment != "" || u.RawQuery != "" || u.Path == "" || u.Path == "/" ||
+		u.Fragment != "" || u.RawQuery != "" || u.ForceQuery || u.Hostname() == "" || u.Path == "" || u.Path == "/" ||
 		strings.Contains(u.Path, "/./") || strings.Contains(u.Path, "/../") || u.String() != raw {
 		return errors.New("a client metadata URL must be a plain https URL with a path")
 	}
@@ -146,18 +161,61 @@ func ValidateMetadataURL(raw string) error {
 }
 
 // Fetch returns the validated metadata document at docURL.
-func (f *MetadataFetcher) Fetch(ctx context.Context, docURL string) (ClientMetadata, error) {
-	now := f.now()
-	f.mu.Lock()
-	if c, ok := f.cache[docURL]; ok && now.Before(c.expires) {
-		f.mu.Unlock()
-		return c.doc, nil
-	}
-	f.mu.Unlock()
-
+func (f *MetadataFetcher) Fetch(ctx context.Context, docURL, generation string) (ClientMetadata, error) {
 	if err := ValidateMetadataURL(docURL); err != nil {
 		return ClientMetadata{}, err
 	}
+	key := metadataKey{url: docURL, generation: generation}
+	for {
+		if err := ctx.Err(); err != nil {
+			return ClientMetadata{}, err
+		}
+		f.mu.Lock()
+		if c, ok := f.cache[key]; ok && f.now().Before(c.expires) {
+			f.mu.Unlock()
+			return c.doc, nil
+		}
+		if pending, ok := f.loading[key]; ok {
+			f.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return ClientMetadata{}, ctx.Err()
+			case <-pending.done:
+				if pending.retry && ctx.Err() == nil {
+					continue
+				}
+				return pending.doc, pending.err
+			}
+		}
+		pending := &metadataLoad{done: make(chan struct{}), err: errors.New("metadata fetch failed")}
+		f.loading[key] = pending
+		f.mu.Unlock()
+		return f.fetchAndPublish(ctx, key, pending)
+	}
+}
+
+func (f *MetadataFetcher) fetchAndPublish(ctx context.Context, key metadataKey, pending *metadataLoad) (doc ClientMetadata, err error) {
+	err = errors.New("metadata fetch failed")
+	defer func() {
+		f.mu.Lock()
+		if f.loading[key] == pending {
+			delete(f.loading, key)
+			if err == nil {
+				f.cache[key] = cachedMetadata{doc: doc, expires: f.now().Add(metadataCacheTTL)}
+			}
+		} else {
+			doc, err = ClientMetadata{}, errMetadataInvalidated
+		}
+		pending.doc, pending.err = doc, err
+		pending.retry = err != nil && ctx.Err() != nil && !errors.Is(err, errMetadataInvalidated)
+		close(pending.done)
+		f.mu.Unlock()
+	}()
+	doc, err = f.fetch(ctx, key.url)
+	return
+}
+
+func (f *MetadataFetcher) fetch(ctx context.Context, docURL string) (ClientMetadata, error) {
 	ctx, cancel := context.WithTimeout(ctx, metadataTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, docURL, nil)
@@ -191,9 +249,6 @@ func (f *MetadataFetcher) Fetch(ctx context.Context, docURL string) (ClientMetad
 	if err := validateMetadata(&doc, docURL); err != nil {
 		return ClientMetadata{}, err
 	}
-	f.mu.Lock()
-	f.cache[docURL] = cachedMetadata{doc: doc, expires: now.Add(metadataCacheTTL)}
-	f.mu.Unlock()
 	return doc, nil
 }
 
@@ -201,7 +256,16 @@ func (f *MetadataFetcher) Fetch(ctx context.Context, docURL string) (ClientMetad
 // reads it again.
 func (f *MetadataFetcher) Forget(docURL string) {
 	f.mu.Lock()
-	delete(f.cache, docURL)
+	for key := range f.cache {
+		if key.url == docURL {
+			delete(f.cache, key)
+		}
+	}
+	for key := range f.loading {
+		if key.url == docURL {
+			delete(f.loading, key)
+		}
+	}
 	f.mu.Unlock()
 }
 
@@ -241,7 +305,7 @@ func clampName(name string) string {
 // never allowed, and comparison later is by exact string.
 func ValidateRedirectURI(raw string) error {
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || u.Fragment != "" || u.User != nil || u.String() != raw {
+	if err != nil || u.Host == "" || u.Hostname() == "" || u.Fragment != "" || u.User != nil || u.String() != raw {
 		return fmt.Errorf("redirect URI %q is not a plain absolute URL", raw)
 	}
 	switch u.Scheme {

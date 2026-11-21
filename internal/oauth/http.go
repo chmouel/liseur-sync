@@ -162,7 +162,7 @@ func (s *Server) authenticateClient(w http.ResponseWriter, r *http.Request) (Cli
 		return Client{}, false
 	}
 	if row.Kind == store.OAuthClientMetadata {
-		if _, err := s.Fetcher.Fetch(r.Context(), row.ID); err != nil {
+		if _, err := s.Fetcher.Fetch(r.Context(), row.ID, row.Generation); err != nil {
 			return invalid()
 		}
 	}
