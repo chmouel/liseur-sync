@@ -218,17 +218,19 @@ func TestOAuthConsentRefusesUntrustedRequests(t *testing.T) {
 func TestOAuthConsentDisabled(t *testing.T) {
 	ts, _ := testServer(t)
 	cookie := loginCookie(t, ts)
-	if code, _ := page(t, ts, cookie, "/ui/oauth/authorize?"+authorizeQuery(nil)); code != http.StatusNotFound {
-		t.Fatalf("consent with MCP off: %d", code)
-	}
-	// The form and the decision arrive together: with the feature off
-	// the route does not exist, so an unauthenticated POST is a 404 and
-	// not a login redirect.
 	for _, c := range []*http.Cookie{nil, cookie} {
-		resp := postRaw(t, ts, c, "/ui/oauth/authorize", url.Values{"decision": {"allow"}})
-		readBody(t, resp)
-		if resp.StatusCode != http.StatusNotFound {
-			t.Fatalf("consent POST with MCP off: %d", resp.StatusCode)
+		if code, _ := page(t, ts, c, "/ui/oauth/authorize?"+authorizeQuery(nil)); code != http.StatusNotFound {
+			t.Fatalf("consent GET with MCP off: %d", code)
+		}
+		for _, path := range []string{
+			"/ui/oauth/authorize", "/ui/oauth/grants/g1/revoke", "/ui/admin/oauth/chatgpt",
+			"/ui/admin/oauth/clients", "/ui/admin/oauth/clients/delete", "/ui/admin/oauth/grants/g1/revoke",
+		} {
+			resp := postRaw(t, ts, c, path, url.Values{"decision": {"allow"}})
+			readBody(t, resp)
+			if resp.StatusCode != http.StatusNotFound {
+				t.Fatalf("POST %s with MCP off: %d", path, resp.StatusCode)
+			}
 		}
 	}
 	if _, body := page(t, ts, cookie, "/ui/settings?section=devices&view=assistants"); !strings.Contains(body, "has not turned on") {

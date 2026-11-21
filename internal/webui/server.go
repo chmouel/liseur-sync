@@ -286,15 +286,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 		// check so a stranger is still asked who they are first.
 		redirectRel(w, "library", http.StatusFound)
 	})
-	mux.Handle("GET /ui/", sec(func(w http.ResponseWriter, r *http.Request) {
-		// A path nothing claimed is a 404 for everybody. Sending a
-		// stranger to sign in first would tell them the page exists.
-		if r.URL.Path != "/ui/" {
-			http.NotFound(w, r)
-			return
-		}
-		frontDoor(w, r)
-	}))
+	mux.Handle("GET /ui/{$}", sec(frontDoor))
 	mux.Handle("GET /ui/insights", sec(s.requireAuth(s.handleInsights)))
 	mux.Handle("GET /ui/login", sec(func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := s.session(r); ok {
@@ -427,28 +419,21 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 		sec(s.requireAdmin(s.handleAdminSetFolderUploads)))
 	mux.Handle("POST /ui/admin/folders/{id}/delete",
 		sec(s.requireAdmin(s.handleAdminDeleteFolder)))
-	// Assistants (ADR-0069). The consent GET resolves its session by
-	// hand: an assistant's link arrives cross-site without the cookie.
-	// With the feature off these routes do not exist, so the POST is a
-	// 404 rather than a login redirect.
+	// The consent GET resolves its session by hand because an assistant's
+	// link arrives cross-site without the cookie.
 	if s.OAuth != nil {
 		mux.Handle("GET /ui/oauth/authorize", sec(s.handleOAuthAuthorize))
 		mux.Handle("POST /ui/oauth/authorize", sec(s.requireAuth(s.handleOAuthDecision)))
-	} else {
-		// With the feature off the consent endpoint does not exist, and
-		// that includes its POST: the /ui/ GET catch-all would otherwise
-		// answer it with a 405.
-		mux.Handle("POST /ui/oauth/authorize", sec(http.HandlerFunc(http.NotFound)))
+		mux.Handle("POST /ui/oauth/grants/{id}/revoke", sec(s.requireAuth(s.handleRevokeOAuthGrant)))
+		mux.Handle("POST /ui/admin/oauth/chatgpt",
+			sec(s.requireAdminAction("oauth.chatgpt", s.handleAdminChatGPT)))
+		mux.Handle("POST /ui/admin/oauth/clients",
+			sec(s.requireAdminAction("oauth.client.create", s.handleAdminCreateOAuthClient)))
+		mux.Handle("POST /ui/admin/oauth/clients/delete",
+			sec(s.requireAdminAction("oauth.client.delete", s.handleAdminDeleteOAuthClient)))
+		mux.Handle("POST /ui/admin/oauth/grants/{id}/revoke",
+			sec(s.requireAdminAction("oauth.grant.revoke", s.handleAdminRevokeOAuthGrant)))
 	}
-	mux.Handle("POST /ui/oauth/grants/{id}/revoke", sec(s.requireAuth(s.handleRevokeOAuthGrant)))
-	mux.Handle("POST /ui/admin/oauth/chatgpt",
-		sec(s.requireAdminAction("oauth.chatgpt", s.handleAdminChatGPT)))
-	mux.Handle("POST /ui/admin/oauth/clients",
-		sec(s.requireAdminAction("oauth.client.create", s.handleAdminCreateOAuthClient)))
-	mux.Handle("POST /ui/admin/oauth/clients/delete",
-		sec(s.requireAdminAction("oauth.client.delete", s.handleAdminDeleteOAuthClient)))
-	mux.Handle("POST /ui/admin/oauth/grants/{id}/revoke",
-		sec(s.requireAdminAction("oauth.grant.revoke", s.handleAdminRevokeOAuthGrant)))
 	mux.Handle("POST /ui/admin/invites", sec(s.requireAdmin(s.handleCreateInvite)))
 	mux.Handle("POST /ui/admin/invites/{id}/revoke", sec(s.requireAdmin(s.handleRevokeInvite)))
 }
