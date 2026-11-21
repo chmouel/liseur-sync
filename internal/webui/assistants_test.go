@@ -37,7 +37,7 @@ func assistantsServer(t *testing.T) (*httptest.Server, store.Store) {
 func authorizeQuery(mutate func(url.Values)) string {
 	q := url.Values{
 		"response_type": {"code"}, "client_id": {"lsc_test"}, "redirect_uri": {consentRedirect},
-		"code_challenge": {strings.Repeat("a", 43)}, "code_challenge_method": {"S256"},
+		"code_challenge": {strings.Repeat("A", 43)}, "code_challenge_method": {"S256"},
 		"state": {"xyz"}, "scope": {"mcp:library mcp:text"},
 	}
 	if mutate != nil {
@@ -158,7 +158,7 @@ func TestOAuthConsentFlow(t *testing.T) {
 	}
 	g, err := st.ExchangeOAuthCode(t.Context(), store.OAuthCodeRedemption{
 		SHA256: auth.HashSecret(loc.Query().Get("code")), ClientID: "lsc_test",
-		RedirectURI: consentRedirect, CodeChallenge: strings.Repeat("a", 43),
+		RedirectURI: consentRedirect, CodeChallenge: strings.Repeat("A", 43),
 		GrantID: "grant-consent",
 	}, time.Now())
 	if err != nil {
@@ -255,7 +255,7 @@ func TestConnectedAssistantsAreTheReadersOwn(t *testing.T) {
 	for _, owner := range []string{"u1", "u2"} {
 		if err := st.CreateOAuthCode(t.Context(), store.OAuthCode{
 			SHA256: "code-" + owner, UserID: owner, ClientID: "lsc_test", ClientName: "Test Assistant",
-			RedirectURI: consentRedirect, CodeChallenge: strings.Repeat("a", 43),
+			RedirectURI: consentRedirect, CodeChallenge: strings.Repeat("A", 43),
 			Resource: "https://books.example/mcp", Scopes: []string{"mcp:library"},
 			CreatedAt: now, ExpiresAt: now.Add(time.Minute),
 		}); err != nil {
@@ -263,7 +263,7 @@ func TestConnectedAssistantsAreTheReadersOwn(t *testing.T) {
 		}
 		if _, err := st.ExchangeOAuthCode(t.Context(), store.OAuthCodeRedemption{
 			SHA256: "code-" + owner, ClientID: "lsc_test", RedirectURI: consentRedirect,
-			CodeChallenge: strings.Repeat("a", 43), GrantID: "grant-" + owner,
+			CodeChallenge: strings.Repeat("A", 43), GrantID: "grant-" + owner,
 			Tokens: []store.OAuthToken{
 				{SHA256: "at-" + owner, Kind: store.OAuthTokenAccess, CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
 				{SHA256: "rt-" + owner, Kind: store.OAuthTokenRefresh, CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)},

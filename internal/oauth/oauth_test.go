@@ -288,13 +288,16 @@ func TestParseAuthorize(t *testing.T) {
 		}
 	}
 	redirected := map[string]func(url.Values){
-		"plain pkce":      func(v url.Values) { v.Set("code_challenge_method", "plain") },
-		"no pkce":         func(v url.Values) { v.Del("code_challenge"); v.Del("code_challenge_method") },
-		"short challenge": func(v url.Values) { v.Set("code_challenge", "abc") },
-		"token response":  func(v url.Values) { v.Set("response_type", "token") },
-		"other resource":  func(v url.Values) { v.Set("resource", "https://sync.example/v1") },
-		"unknown scope":   func(v url.Values) { v.Set("scope", "mcp:library admin") },
-		"repeated":        func(v url.Values) { v.Add("scope", "mcp:text") },
+		"plain pkce":             func(v url.Values) { v.Set("code_challenge_method", "plain") },
+		"no pkce":                func(v url.Values) { v.Del("code_challenge"); v.Del("code_challenge_method") },
+		"short challenge":        func(v url.Values) { v.Set("code_challenge", "abc") },
+		"long challenge":         func(v url.Values) { v.Set("code_challenge", strings.Repeat("A", 44)) },
+		"verifier alphabet":      func(v url.Values) { v.Set("code_challenge", strings.Repeat("A", 42)+"~") },
+		"noncanonical challenge": func(v url.Values) { v.Set("code_challenge", strings.Repeat("A", 42)+"B") },
+		"token response":         func(v url.Values) { v.Set("response_type", "token") },
+		"other resource":         func(v url.Values) { v.Set("resource", "https://sync.example/v1") },
+		"unknown scope":          func(v url.Values) { v.Set("scope", "mcp:library admin") },
+		"repeated":               func(v url.Values) { v.Add("scope", "mcp:text") },
 	}
 	for name, mutate := range redirected {
 		q := authorizeQuery("lsc_public")
