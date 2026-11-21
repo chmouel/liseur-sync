@@ -328,6 +328,27 @@ func TestMCPReadsAroundTheReadersOwnPlaces(t *testing.T) {
 	if all["total"] != float64(2) || read["total"] != float64(1) || read["stop_located_by"] != "anchor" {
 		t.Fatalf("find_mentions: all %v, up to current %v", all, read)
 	}
+	quoted := read["occurrences"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(quoted, "Ishmael") || strings.Contains(quoted, "Ahab") || strings.Contains(quoted, "came on deck") {
+		t.Fatalf("snippet crossed the reading position: %q", quoted)
+	}
+
+	chapters := f.mustCall(t, access, "list_chapters", map[string]any{"book_id": bookID})["chapters"].([]any)
+	chapter := chapters[f.chapterIndex(t, access, bookID, "Loomings")].(map[string]any)
+	page := f.mustCall(t, access, "read_chapter", map[string]any{"book_id": bookID, "chapter": chapter["chapter"]})
+	text := page["text"].(string)
+	inside := strings.Index(text, "Ishmael") + 3
+	if inside < 3 {
+		t.Fatalf("missing Ishmael in %q", text)
+	}
+	start, end := chapter["start_progression"].(float64), chapter["end_progression"].(float64)
+	stop := start + (end-start)*float64(inside)/chapter["length"].(float64)
+	partial := f.mustCall(t, access, "find_mentions", map[string]any{
+		"book_id": bookID, "names": []string{"Ishmael"}, "up_to_progression": stop,
+	})
+	if partial["total"] != float64(0) || len(partial["occurrences"].([]any)) != 0 {
+		t.Fatalf("match crossing the stop: %v", partial)
+	}
 
 	if code, out := post(t, f.ts.URL+"/v1/annotations", f.token, map[string]any{"annotations": []map[string]any{{
 		"id": "h1", "base_rev": 0, "work_id": resolved.WorkID, "edition_sha": sha, "kind": "highlight",

@@ -571,7 +571,7 @@ func (m *mcpService) searchText(ctx context.Context, raw json.RawMessage) (any, 
 	if err != nil {
 		return nil, err
 	}
-	hits, more := t.Find([]string{term}, false, 0, 0, limit)
+	hits, more := t.Find([]string{term}, false, 0, nil, limit)
 	results := []map[string]any{}
 	used := 0
 	for _, h := range hits {
@@ -649,23 +649,19 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 		return nil, err
 	}
 	out := map[string]any{"book_id": b.ID, "names": in.Names, "content_notice": textNotice}
-	stop := 0.0
+	var stop *booktext.Position
 	switch {
 	case in.UpToProgression != nil:
-		stop = *in.UpToProgression
+		ch, off := t.AtProgression(*in.UpToProgression)
+		stop = &booktext.Position{Chapter: ch, Offset: off}
 	case in.UpToCurrent:
 		pl, _, err := m.readerPlace(ctx, userID, b, t, "current")
 		if err != nil {
 			return nil, err
 		}
-		stop = t.Progression(pl.ch, pl.off)
-		out["stopped_at_progression"] = stop
+		stop = &booktext.Position{Chapter: pl.ch, Offset: pl.off}
+		out["stopped_at_progression"] = t.Progression(pl.ch, pl.off)
 		out["stop_located_by"] = pl.by
-		if stop <= 0 {
-			out["total"] = 0
-			out["occurrences"] = []any{}
-			return out, nil
-		}
 	}
 	hits, capped := t.Find(terms, true, 0, stop, maxMentionScan)
 	if skip > len(hits) {
@@ -707,7 +703,11 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 	for ; next < len(hits) && len(occurrences) < limit; next++ {
 		h := hits[next]
 		half := window / 2
-		p := t.Window(h.Chapter, h.Offset, half, h.Length+half)
+		after := h.Length + half
+		if stop != nil && h.Chapter == stop.Chapter {
+			after = min(after, stop.Offset-h.Offset)
+		}
+		p := t.Window(h.Chapter, h.Offset, half, after)
 		if used+len(p.Text) > allow {
 			break
 		}

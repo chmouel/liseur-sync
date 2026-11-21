@@ -36,7 +36,7 @@ func testBook() *Book {
 func TestFindMentions(t *testing.T) {
 	b := testBook()
 	terms := []string{FoldQuery("Raskolnikov"), FoldQuery("Rodya"), FoldQuery("Rodion  Romanovich")}
-	hits, more := b.Find(terms, true, 0, 0, 100)
+	hits, more := b.Find(terms, true, 0, nil, 100)
 	if more {
 		t.Fatal("more reported")
 	}
@@ -50,15 +50,15 @@ func TestFindMentions(t *testing.T) {
 		t.Fatalf("hits = %q, want %q", got, want)
 	}
 
-	hits, more = b.Find(terms, true, 0, 0, 2)
+	hits, more = b.Find(terms, true, 0, nil, 2)
 	if len(hits) != 2 || !more {
 		t.Fatalf("limit: %d hits, more=%v", len(hits), more)
 	}
-	hits, _ = b.Find(terms, true, 0, b.Chapters[1].StartProg, 100)
+	hits, _ = b.Find(terms, true, 0, &Position{Chapter: 1}, 100)
 	if len(hits) != 3 {
 		t.Fatalf("stop at chapter 2: %d hits", len(hits))
 	}
-	hits, _ = b.Find([]string{FoldQuery("emile")}, true, 0, 0, 10)
+	hits, _ = b.Find([]string{FoldQuery("emile")}, true, 0, nil, 10)
 	if len(hits) != 0 {
 		t.Fatal("phantom hit")
 	}
@@ -67,9 +67,22 @@ func TestFindMentions(t *testing.T) {
 func TestFindFoldsDiacritics(t *testing.T) {
 	b := &Book{Chapters: []Chapter{{Text: "Hier, Émile a vu ÉMILE."}}, bytes: 1}
 	b.fillSpans()
-	hits, _ := b.Find([]string{FoldQuery("emile")}, true, 0, 0, 10)
+	hits, _ := b.Find([]string{FoldQuery("emile")}, true, 0, nil, 10)
 	if len(hits) != 2 || b.Chapters[0].Text[hits[0].Offset:hits[0].Offset+hits[0].Length] != "Émile" {
 		t.Fatalf("hits = %+v", hits)
+	}
+}
+
+func TestFindStopsAtMatchEnd(t *testing.T) {
+	b := &Book{Chapters: []Chapter{{Text: "Émile spoke"}}}
+	terms := []string{FoldQuery("Émile"), FoldQuery("Ém")}
+	hits, _ := b.Find(terms, false, 0, &Position{Offset: len("Ém")}, 10)
+	if len(hits) != 1 || hits[0].Length != len("Ém") {
+		t.Fatalf("matches crossing the stop: %+v", hits)
+	}
+	hits, _ = b.Find(terms[:1], true, 0, &Position{Offset: len("Émile")}, 10)
+	if len(hits) != 1 || hits[0].Length != len("Émile") {
+		t.Fatalf("match ending at the stop: %+v", hits)
 	}
 }
 
