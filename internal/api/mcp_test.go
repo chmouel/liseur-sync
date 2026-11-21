@@ -215,6 +215,59 @@ func TestMCPToolsFollowGrantedScopes(t *testing.T) {
 	}
 }
 
+func TestMCPWorkStatsRespectReadingScope(t *testing.T) {
+	f := newFolderFixture(t)
+	f.enableMCP(t, nil)
+	bookID, sha := f.writeBook(t, "moby.epub", chapterEPUB(t))
+	_, resolved := f.resolveBook(t, bookID, f.token)
+	resp, body := f.postRaw(t, "/v1/ops", f.token, `{"ops":[
+		{"op_id":"position","work_id":"`+resolved.WorkID+`","edition_sha":"`+sha+`",
+		 "client_ts":"2024-01-01T12:00:00Z","progression":0.4},
+		{"op_id":"status","work_id":"`+resolved.WorkID+`","edition_sha":"`+sha+`",
+		 "client_ts":"2024-01-01T12:01:00Z","progression":0.4,"kind":"status","reading_status":"paused"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("push: %d %s", resp.StatusCode, body)
+	}
+	start := time.Date(2024, 1, 1, 11, 0, 0, 0, time.UTC)
+	if err := f.st.AppendSessions(t.Context(), f.user.ID, []store.Session{{
+		UserID: f.user.ID, SessionID: "session", WorkID: resolved.WorkID, DeviceID: "device",
+		StartedAt: start, EndedAt: start.Add(time.Hour), StartProg: 0.1, EndProg: 0.4, Origin: store.OriginNative,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name           string
+		scopes         []string
+		readingAllowed bool
+	}{
+		{"insights only", []string{oauth.ScopeInsights}, false},
+		{"insights and reading", []string{oauth.ScopeInsights, oauth.ScopeReading}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			access := f.assistantToken(t, f.user.ID, tc.scopes...)
+			list := f.mustCall(t, access, "get_work_stats", map[string]any{"range": "all"})
+			works := list["works"].([]any)
+			if len(works) != 1 {
+				t.Fatalf("works: %v", works)
+			}
+			one := f.mustCall(t, access, "get_work_stats", map[string]any{"work_id": resolved.WorkID, "range": "all"})
+			for _, work := range []map[string]any{works[0].(map[string]any), one} {
+				if work["sessions"] != float64(1) || work["total_active_minutes"] != float64(60) {
+					t.Fatalf("missing statistics: %v", work)
+				}
+				for _, key := range []string{"current_progression", "status", "eta_seconds"} {
+					if _, ok := work[key]; ok != tc.readingAllowed {
+						t.Fatalf("%s present=%v, reading allowed=%v: %v", key, ok, tc.readingAllowed, work)
+					}
+				}
+				if tc.readingAllowed && (work["current_progression"] != 0.4 || work["status"] != "paused" || work["eta_seconds"] == nil) {
+					t.Fatalf("wrong reading fields: %v", work)
+				}
+			}
+		})
+	}
+}
+
 func TestMCPReadsOnlyTheGrantedLibrary(t *testing.T) {
 	f := newFolderFixture(t)
 	f.enableMCP(t, nil)
