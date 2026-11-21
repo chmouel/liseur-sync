@@ -134,7 +134,7 @@ var ErrUnknownClient = errors.New("this application is not allowed on this serve
 // because an administrator allowlisted its exact URL; its redirect URIs
 // come from the document itself.
 func (s *Server) ResolveClient(ctx context.Context, clientID string) (Client, error) {
-	if clientID == "" || len(clientID) > 512 {
+	if clientID == "" || len(clientID) > maxClientIDBytes {
 		return Client{}, ErrUnknownClient
 	}
 	row, err := s.st.OAuthClient(ctx, clientID)

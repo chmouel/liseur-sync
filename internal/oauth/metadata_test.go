@@ -120,6 +120,16 @@ func TestMetadataURLRejectsInvalidAuthorityAndQuery(t *testing.T) {
 	}
 }
 
+func TestMetadataURLLength(t *testing.T) {
+	prefix := "https://client.example/"
+	for _, n := range []int{512, 513} {
+		raw := prefix + strings.Repeat("a", n-len(prefix))
+		if err := ValidateMetadataURL(raw); (err == nil) != (n == 512) {
+			t.Errorf("URL length %d: %v", n, err)
+		}
+	}
+}
+
 func TestMetadataUpstreamTimeoutIsShared(t *testing.T) {
 	f := NewMetadataFetcher()
 	id := "https://client.example/metadata.json"
