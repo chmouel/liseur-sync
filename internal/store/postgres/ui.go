@@ -244,12 +244,10 @@ func (s *Store) RevokeAllUserCredentials(ctx context.Context, userID string, at 
 		`UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
 		`UPDATE kosync_devices SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
 		`UPDATE koplugin_devices SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
-		`UPDATE oauth_grants SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
-		// An approved authorization code nobody has spent yet is a grant
-		// in waiting: redeeming it after this mints a fresh one. Marking
-		// it used is how this schema spells "spent", and a redemption of
-		// a code spent without a grant mints nothing.
+		// Wait for in-flight exchanges before taking the grant update's
+		// snapshot, so their newly committed grants are revoked too.
 		`UPDATE oauth_codes SET used_at = ? WHERE user_id = ? AND used_at IS NULL`,
+		`UPDATE oauth_grants SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
 		// An unredeemed pairing code is a credential in waiting: it
 		// mints a kosync device slot on first use. Marking it used is
 		// how this schema spells "spent".
