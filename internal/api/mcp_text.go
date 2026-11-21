@@ -112,14 +112,14 @@ func (m *mcpService) bookText(ctx context.Context, userID, bookID string) (store
 	if b.Status != store.BookActive || m.s.Files == nil {
 		return b, nil, mcp.Errorf("this book's file is not available")
 	}
-	if t, ok := m.texts.get(b.ContentSHA256); ok {
-		return b, t, nil
-	}
 	f, size, err := m.s.Files.OpenBook(ctx, b)
 	if err != nil {
 		return b, nil, mcp.Errorf("this book's file is not available")
 	}
 	defer f.Close()
+	if t, ok := m.texts.get(b.ContentSHA256); ok {
+		return b, t, nil
+	}
 	idx, err := m.s.publicationIndex(ctx, b.ContentSHA256, f, size)
 	if err != nil {
 		return b, nil, mcp.Errorf("this book has no readable EPUB text")
