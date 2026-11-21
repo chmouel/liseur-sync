@@ -753,6 +753,9 @@ func (m *mcpService) statsSummary(ctx context.Context, raw json.RawMessage) (any
 		if err := errors.Join(validDay("from", in.From), validDay("to", in.To)); err != nil {
 			return nil, mcp.Errorf("from and to must be dates as YYYY-MM-DD")
 		}
+		if in.From > in.To {
+			return nil, mcp.Errorf("from must be on or before to")
+		}
 	}
 	now := m.now()
 	snap, loc, err := m.insightsFor(ctx)
