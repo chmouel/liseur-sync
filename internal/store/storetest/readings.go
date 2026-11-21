@@ -1,6 +1,7 @@
 package storetest
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -439,5 +440,34 @@ func testStatusOrderingAcrossDevices(t *testing.T, open OpenFunc) {
 		if got, resolved := choice("automatic after " + string(status)); got != store.ReadingStatusAutomatic || resolved != reading.StatusReading {
 			t.Fatalf("automatic did not withdraw %s: choice=%q status=%q", status, got, resolved)
 		}
+	}
+}
+
+func testWorkSummaryByID(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := t.Context()
+	u := MkUser(t, s, "summary-owner")
+	other := MkUser(t, s, "summary-other")
+	w := MkWork(t, s, u, "summary-work", "summary-sha")
+	ops := []store.Op{
+		{OpID: "position", WorkID: w.ID, ClientTS: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), Progression: 0.4, Origin: store.OriginNative},
+		{OpID: "status", WorkID: w.ID, ClientTS: time.Date(2020, 1, 2, 0, 0, 0, 0, time.UTC), Progression: 0.4, Origin: store.OriginNative, Kind: store.OpKindStatus, ReadingStatus: store.ReadingStatusPaused},
+	}
+	if _, err := s.AppendOps(ctx, u.ID, "phone", ops); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.ListWorks(ctx, u.ID)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list: %+v %v", list, err)
+	}
+	one, err := s.WorkSummaryByID(ctx, u.ID, w.ID)
+	if err != nil || one.Progression == nil || *one.Progression != *list[0].Progression || one.LastActive == nil || !one.LastActive.Equal(*list[0].LastActive) {
+		t.Fatalf("single %+v, list %+v, error %v", one, list, err)
+	}
+	if _, err := s.WorkSummaryByID(ctx, other.ID, w.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("other user: %v", err)
+	}
+	if _, err := s.WorkSummaryByID(ctx, u.ID, ""); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("empty ID: %v", err)
 	}
 }
