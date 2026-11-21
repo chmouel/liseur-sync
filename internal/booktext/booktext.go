@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -313,17 +314,130 @@ func hidden(z *html.Tokenizer) bool {
 	for {
 		key, val, more := z.TagAttr()
 		k := strings.ToLower(string(key))
-		v := strings.ToLower(strings.ReplaceAll(string(val), " ", ""))
+		v := strings.TrimSpace(string(val))
 		switch {
 		case k == "hidden",
-			k == "aria-hidden" && v == "true",
-			k == "style" && (strings.Contains(v, "display:none") || strings.Contains(v, "visibility:hidden")):
+			k == "aria-hidden" && strings.EqualFold(v, "true"),
+			k == "style" && hiddenStyle(v):
 			return true
 		}
 		if !more {
 			return false
 		}
 	}
+}
+
+func hiddenStyle(style string) bool {
+	type property struct {
+		hidden    bool
+		important bool
+	}
+	var display, visibility property
+	for _, declaration := range styleDeclarations(style) {
+		name, value, ok := strings.Cut(declaration, ":")
+		if !ok {
+			continue
+		}
+		name = strings.ToLower(strings.TrimSpace(name))
+		value = strings.ToLower(strings.TrimSpace(value))
+		important := false
+		if i := strings.LastIndexByte(value, '!'); i >= 0 {
+			if !strings.EqualFold(strings.TrimSpace(value[i+1:]), "important") {
+				continue
+			}
+			important = true
+			value = strings.TrimSpace(value[:i])
+		}
+		var target *property
+		var hidden bool
+		switch name {
+		case "display":
+			if !validDisplay(value) {
+				continue
+			}
+			target, hidden = &display, value == "none"
+		case "visibility":
+			if !slices.Contains([]string{"visible", "hidden", "collapse", "initial", "inherit", "unset", "revert", "revert-layer"}, value) {
+				continue
+			}
+			target, hidden = &visibility, value == "hidden" || value == "collapse"
+		default:
+			continue
+		}
+		if !target.important || important {
+			*target = property{hidden: hidden, important: important}
+		}
+	}
+	return display.hidden || visibility.hidden
+}
+
+func validDisplay(value string) bool {
+	if slices.Contains([]string{
+		"none", "block", "inline", "run-in", "inline-block", "flex", "inline-flex", "grid", "inline-grid", "flow", "flow-root", "list-item", "table", "inline-table", "table-row", "table-cell", "table-caption", "table-row-group", "table-header-group", "table-footer-group", "table-column", "table-column-group", "ruby", "ruby-base", "ruby-text", "ruby-base-container", "ruby-text-container", "contents", "initial", "inherit", "unset", "revert", "revert-layer",
+	}, value) {
+		return true
+	}
+	var outside, inside, list bool
+	for _, word := range strings.Fields(value) {
+		switch {
+		case slices.Contains([]string{"block", "inline", "run-in"}, word) && !outside:
+			outside = true
+		case slices.Contains([]string{"flow", "flow-root", "table", "flex", "grid", "ruby"}, word) && !inside:
+			inside = true
+		case word == "list-item" && !list:
+			list = true
+		default:
+			return false
+		}
+	}
+	return outside && inside && !list || list && (outside || inside) && !strings.Contains(value, "flex") && !strings.Contains(value, "grid") && !strings.Contains(value, "table") && !strings.Contains(value, "ruby")
+}
+
+func styleDeclarations(style string) []string {
+	var declarations []string
+	var current strings.Builder
+	var quote byte
+	depth := 0
+	for i := 0; i < len(style); i++ {
+		ch := style[i]
+		if quote != 0 {
+			current.WriteByte(ch)
+			if ch == '\\' && i+1 < len(style) {
+				i++
+				current.WriteByte(style[i])
+			} else if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '/' && i+1 < len(style) && style[i+1] == '*' {
+			end := strings.Index(style[i+2:], "*/")
+			if end < 0 {
+				break
+			}
+			current.WriteByte(' ')
+			i += end + 3
+			continue
+		}
+		switch ch {
+		case '\'', '"':
+			quote = ch
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ';':
+			if depth == 0 {
+				declarations = append(declarations, current.String())
+				current.Reset()
+				continue
+			}
+		}
+		current.WriteByte(ch)
+	}
+	return append(declarations, current.String())
 }
 
 type textWriter struct {

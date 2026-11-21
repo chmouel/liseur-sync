@@ -67,6 +67,27 @@ night.</p><script>alert(1)</script><p hidden="">secret</p><div style="display: n
 	}
 }
 
+func TestHTMLTextChecksActualHiddenStyleProperties(t *testing.T) {
+	doc := `<html><body><p style="display:&#9;none">Hidden display</p><p style="visibility: &#10;hidden !important">Hidden visibility</p><p style="--display:none">Visible custom property</p><p style="display:block">Visible text</p></body></html>`
+	text, _ := htmlText([]byte(doc))
+	if strings.Contains(text, "Hidden") || !strings.Contains(text, "Visible custom property") || !strings.Contains(text, "Visible text") {
+		t.Fatalf("extracted text: %q", text)
+	}
+}
+
+func TestHTMLTextRespectsStyleDeclarationOrder(t *testing.T) {
+	doc := `<html><body><p style="display:none; display:block">Visible override</p><p style="--label:'x;display:none;y'">Visible quoted value</p><p style="display:none!important; display:block">Hidden priority</p><p style="visibility:hidden; visibility:visible">Visible visibility</p><p style="display:none; display:bogus">Hidden invalid override</p><p style="display:none; display:initial">Visible display reset</p><p style="visibility:hidden; visibility:initial">Visible visibility reset</p><p style="display:none; display:table-caption">Visible table caption</p><p style="display:none; display:inline flow-root">Visible multi-keyword</p><p style="display:no/**/ne">Visible separated identifier</p><p style="display:none; display:inline/**/flow-root">Visible comment boundary</p></body></html>`
+	text, _ := htmlText([]byte(doc))
+	for _, visible := range []string{"Visible override", "Visible quoted value", "Visible visibility", "Visible display reset", "Visible visibility reset", "Visible table caption", "Visible multi-keyword", "Visible separated identifier", "Visible comment boundary"} {
+		if !strings.Contains(text, visible) {
+			t.Errorf("missing %q: %q", visible, text)
+		}
+	}
+	if strings.Contains(text, "Hidden") {
+		t.Fatalf("hidden text: %q", text)
+	}
+}
+
 func TestHTMLTextAfterSelfClosingRawTextTags(t *testing.T) {
 	for _, tag := range []string{"style", "title", "script"} {
 		doc := "<html><head><" + tag + "/></head><body><p>Readable chapter.</p></body></html>"
