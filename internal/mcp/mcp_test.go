@@ -75,6 +75,9 @@ func TestTransportRefusals(t *testing.T) {
 	if w, _ := post(t, s, `{"jsonrpc":"2.0","id":1,"method":"ping"}`, "MCP-Protocol-Version", "1999-01-01"); w.Code != http.StatusBadRequest {
 		t.Fatalf("bad version header: %d", w.Code)
 	}
+	if w, _ := post(t, s, `{"jsonrpc":"2.0","id":1,"method":"ping"}`, "MCP-Protocol-Version", "2025-03-26"); w.Code != http.StatusBadRequest {
+		t.Fatalf("batch-capable version header: %d", w.Code)
+	}
 	if w, _ := post(t, s, `{"jsonrpc":"2.0","id":1,"method":"ping","x":"`+strings.Repeat("a", bodyMax)+`"}`); w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversize: %d", w.Code)
 	}
@@ -89,6 +92,10 @@ func TestInitializeNegotiates(t *testing.T) {
 	_, out = post(t, s, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2099-01-01"}}`)
 	if got := out["result"].(map[string]any)["protocolVersion"]; got != protocolVersions[0] {
 		t.Fatalf("unknown version answered with %v", got)
+	}
+	_, out = post(t, s, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}`)
+	if got := out["result"].(map[string]any)["protocolVersion"]; got != protocolVersions[0] {
+		t.Fatalf("batch-capable version answered with %v", got)
 	}
 }
 

@@ -20,7 +20,7 @@ import (
 )
 
 // Protocol versions this server speaks, newest first.
-var protocolVersions = []string{"2025-11-25", "2025-06-18", "2025-03-26"}
+var protocolVersions = []string{"2025-11-25", "2025-06-18"}
 
 const (
 	bodyMax         = 64 << 10
