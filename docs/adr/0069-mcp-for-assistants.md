@@ -49,7 +49,9 @@ Authorization is OAuth 2.1, authorization code with PKCE `S256` only.
 - A metadata document is fetched over HTTPS only. Redirects are refused,
   and so is any address that is not public, checked at dial time. The
   fetch is bounded to 64 KiB and 5 s and cached for 15 minutes. Its
-  `client_id` must equal its URL. Redirect URIs match exactly.
+  `client_id` must equal its URL. Redirect URIs match exactly. Metadata
+  clients must permit the public `none` token authentication method;
+  signed client assertions are not supported.
 - Codes are single use and live 60 s. Replaying one revokes the grant
   it produced. Access tokens live an hour. Refresh tokens rotate on
   every use, and reusing a spent one revokes the whole grant. Every

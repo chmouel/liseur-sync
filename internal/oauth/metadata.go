@@ -37,6 +37,7 @@ type ClientMetadata struct {
 	ClientURI    string   `json:"client_uri"`
 	RedirectURIs []string `json:"redirect_uris"`
 	AuthMethod   string   `json:"token_endpoint_auth_method"`
+	AuthMethods  []string `json:"token_endpoint_auth_methods_supported"`
 	ClientSecret string   `json:"client_secret"`
 }
 
@@ -208,8 +209,12 @@ func validateMetadata(doc *ClientMetadata, docURL string) error {
 	if doc.ClientID != docURL {
 		return errors.New("client metadata names a different client_id")
 	}
-	if doc.ClientSecret != "" || strings.HasPrefix(doc.AuthMethod, "client_secret") {
-		return errors.New("client metadata must not use a shared secret")
+	allowNone := doc.AuthMethod == "none"
+	for _, method := range doc.AuthMethods {
+		allowNone = allowNone || method == "none"
+	}
+	if doc.ClientSecret != "" || !allowNone {
+		return errors.New("client metadata must permit the none authentication method without a shared secret")
 	}
 	if len(doc.RedirectURIs) == 0 || len(doc.RedirectURIs) > maxRedirectURIs {
 		return fmt.Errorf("client metadata must list between 1 and %d redirect_uris", maxRedirectURIs)

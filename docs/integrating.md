@@ -2054,7 +2054,8 @@ That document names the authorization server, whose metadata is at
 `/.well-known/oauth-authorization-server`. From there:
 
 1. Get a client ID. Publish a Client ID Metadata Document at an HTTPS
-   URL and ask the administrator to allow that URL, or ask them to
+   URL with `none` as a token authentication method and ask the administrator
+   to allow that URL, or ask them to
    register the client by hand. Dynamic client registration is not
    offered.
 2. Send the reader's browser to the `authorization_endpoint` with
