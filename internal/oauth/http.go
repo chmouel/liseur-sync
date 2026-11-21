@@ -250,6 +250,10 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request, client Client) 
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_target"})
 		return
 	}
+	if f.Has("scope") {
+		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_scope", Description: "omit scope to refresh the existing grant"})
+		return
+	}
 	access, refresh, tokens, err := s.newTokens()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, tokenError{Error: "server_error"})
@@ -267,8 +271,6 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request, client Client) 
 		writeJSON(w, http.StatusInternalServerError, tokenError{Error: "server_error"})
 		return
 	}
-	// A refresh can never widen a grant; a narrower scope parameter is
-	// ignored rather than stored, and the response says what holds.
 	writeJSON(w, http.StatusOK, tokenResponse{
 		AccessToken: access, TokenType: "Bearer", ExpiresIn: int64(s.accessTTL.Seconds()),
 		RefreshToken: refresh, Scope: strings.Join(g.Scopes, " "),

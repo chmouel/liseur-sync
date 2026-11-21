@@ -169,6 +169,9 @@ func TestCodeFlowAndRefreshRotation(t *testing.T) {
 	code = f.code(t, "lsc_public")
 	_, body = f.token(exchange(code, "lsc_public"))
 	access, refresh := body["access_token"].(string), body["refresh_token"].(string)
+	if status, body := f.token(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {"lsc_public"}, "scope": {"mcp:library"}}); status != http.StatusBadRequest || body["error"] != "invalid_scope" {
+		t.Fatalf("scoped refresh: %d %v", status, body)
+	}
 	status, body = f.token(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {"lsc_public"}})
 	if status != http.StatusOK || body["scope"] != "mcp:library mcp:text" {
 		t.Fatalf("refresh: %d %v", status, body)
