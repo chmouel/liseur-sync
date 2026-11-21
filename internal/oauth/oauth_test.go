@@ -380,11 +380,11 @@ func TestMetadataClient(t *testing.T) {
 	if _, err := f.srv.ResolveClient(ctx, id); err == nil {
 		t.Fatal("a metadata client with a shared secret was accepted")
 	}
-	doc = map[string]any{"client_id": id, "redirect_uris": []string{"http://app.example/cb"}}
+	doc = map[string]any{"client_id": id, "redirect_uris": []string{"http://app.example/cb"}, "token_endpoint_auth_method": "none"}
 	if _, err := f.srv.ResolveClient(ctx, id); err == nil {
 		t.Fatal("a plain-http redirect was accepted")
 	}
-	doc = map[string]any{"client_id": id, "client_name": "Example App", "redirect_uris": []string{redirect}}
+	doc = map[string]any{"client_id": id, "client_name": "Example App", "redirect_uris": []string{redirect}, "token_endpoint_auth_method": "none"}
 	c, err := f.srv.ResolveClient(ctx, id)
 	if err != nil || c.Name != "Example App" || c.Host() == "" {
 		t.Fatalf("valid document: %+v %v", c, err)
@@ -402,6 +402,67 @@ func TestMetadataClient(t *testing.T) {
 		if _, err := f.srv.ResolveClient(ctx, other); err == nil {
 			t.Errorf("%s accepted", path)
 		}
+	}
+}
+
+func TestMetadataClientAuthenticationMethods(t *testing.T) {
+	f := newFixture(t)
+	var doc map[string]any
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(doc)
+	}))
+	defer srv.Close()
+	id := srv.URL + "/client.json"
+	if err := f.st.CreateOAuthClient(t.Context(), store.OAuthClient{ID: id, Kind: store.OAuthClientMetadata, CreatedAt: f.now}); err != nil {
+		t.Fatal(err)
+	}
+	f.srv.Fetcher.Client = srv.Client()
+	for _, tc := range []struct {
+		name    string
+		method  string
+		methods []string
+		secret  string
+		valid   bool
+	}{
+		{name: "none", method: "none", valid: true},
+		{name: "none alternative", method: "private_key_jwt", methods: []string{"none", "private_key_jwt"}, valid: true},
+		{name: "jwt only", method: "private_key_jwt"},
+		{name: "unknown", method: "unknown"},
+		{name: "omitted"},
+		{name: "secret", method: "none", secret: "secret"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc = map[string]any{"client_id": id, "redirect_uris": []string{redirect},
+				"token_endpoint_auth_method": tc.method, "token_endpoint_auth_methods_supported": tc.methods,
+				"client_secret": tc.secret}
+			f.srv.Fetcher.Forget(id)
+			_, err := f.srv.ResolveClient(t.Context(), id)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v: %v", tc.valid, err)
+			}
+		})
+	}
+
+	doc = map[string]any{"client_id": id, "redirect_uris": []string{redirect}, "token_endpoint_auth_method": "none"}
+	f.srv.Fetcher.Forget(id)
+	code := f.code(t, id)
+	doc["token_endpoint_auth_method"] = "private_key_jwt"
+	f.srv.Fetcher.Forget(id)
+	if status, body := f.token(exchange(code, id)); status != http.StatusUnauthorized || body["error"] != "invalid_client" {
+		t.Fatalf("exchange with unsupported authentication: %d %v", status, body)
+	}
+	doc["token_endpoint_auth_method"] = "none"
+	f.srv.Fetcher.Forget(id)
+	status, body := f.token(exchange(code, id))
+	if status != http.StatusOK {
+		t.Fatalf("exchange with public authentication: %d %v", status, body)
+	}
+	refresh := body["refresh_token"].(string)
+	doc["token_endpoint_auth_method"] = "private_key_jwt"
+	f.srv.Fetcher.Forget(id)
+	if status, body := f.token(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {id}}); status != http.StatusUnauthorized || body["error"] != "invalid_client" {
+		t.Fatalf("refresh with unsupported authentication: %d %v", status, body)
 	}
 }
 

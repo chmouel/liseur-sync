@@ -161,6 +161,11 @@ func (s *Server) authenticateClient(w http.ResponseWriter, r *http.Request) (Cli
 		writeJSON(w, http.StatusInternalServerError, tokenError{Error: "server_error"})
 		return Client{}, false
 	}
+	if row.Kind == store.OAuthClientMetadata {
+		if _, err := s.Fetcher.Fetch(r.Context(), row.ID); err != nil {
+			return invalid()
+		}
+	}
 	c := Client{ID: row.ID, Kind: row.Kind, Name: row.Name, Confidential: row.SecretSHA256 != "", secretSHA256: row.SecretSHA256}
 	if c.Confidential {
 		if secret == "" || subtle.ConstantTimeCompare([]byte(auth.HashSecret(secret)), []byte(c.secretSHA256)) != 1 {
