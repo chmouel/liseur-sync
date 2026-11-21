@@ -182,9 +182,6 @@ func passageJSON(bookID string, p booktext.Passage) map[string]any {
 		"book_id": bookID, "chapter": p.Chapter, "start": p.Start, "end": p.End,
 		"progression": p.Progression, "text": p.Text,
 	}
-	if p.Title != "" {
-		out["chapter_title"] = p.Title
-	}
 	return out
 }
 
@@ -193,10 +190,15 @@ func chapterJSON(i int, c *booktext.Chapter) map[string]any {
 		"chapter": i, "length": len(c.Text),
 		"start_progression": c.StartProg, "end_progression": c.EndProg,
 	}
-	if c.Title != "" {
-		out["title"] = c.Title
-	}
 	return out
+}
+
+func addTextTitle(out map[string]any, key, title string, remaining int) int {
+	if title == "" || len(title) > remaining {
+		return 0
+	}
+	out[key] = title
+	return len(title)
 }
 
 func (m *mcpService) chapters(ctx context.Context, raw json.RawMessage, outline bool) (any, error) {
@@ -206,12 +208,9 @@ func (m *mcpService) chapters(ctx context.Context, raw json.RawMessage, outline 
 	if err := mcp.DecodeArgs(raw, &in); err != nil {
 		return nil, err
 	}
-	var allow int
-	if outline {
-		var err error
-		if allow, err = m.allowance(ctx); err != nil {
-			return nil, err
-		}
+	allow, err := m.allowance(ctx)
+	if err != nil {
+		return nil, err
 	}
 	b, t, err := m.bookText(ctx, mcpUser(ctx), in.BookID)
 	if err != nil {
@@ -219,9 +218,15 @@ func (m *mcpService) chapters(ctx context.Context, raw json.RawMessage, outline 
 	}
 	list := make([]map[string]any, 0, len(t.Chapters))
 	used := 0
+	titlesTruncated := false
 	for i := range t.Chapters {
 		c := &t.Chapters[i]
 		entry := chapterJSON(i, c)
+		n := addTextTitle(entry, "title", c.Title, allow-used)
+		used += n
+		if c.Title != "" && n == 0 {
+			titlesTruncated = true
+		}
 		if outline {
 			if s := c.FirstSentence(200); s != "" && used+len(s) <= allow {
 				entry["opening"] = s
@@ -230,12 +235,13 @@ func (m *mcpService) chapters(ctx context.Context, raw json.RawMessage, outline 
 		}
 		list = append(list, entry)
 	}
-	if outline {
-		if err := m.charge(ctx, used); err != nil {
-			return nil, err
-		}
+	if err := m.charge(ctx, used); err != nil {
+		return nil, err
 	}
 	out := map[string]any{"book_id": b.ID, "title": b.Title, "chapters": list, "content_notice": textNotice}
+	if titlesTruncated {
+		out["titles_truncated"] = true
+	}
 	if t.Truncated {
 		out["truncated"] = true
 	}
@@ -289,10 +295,11 @@ func (m *mcpService) readChapter(ctx context.Context, raw json.RawMessage) (any,
 	if p.End == p.Start && p.End < len(c.Text) {
 		return nil, mcp.Errorf("the book text allowance is too low to return the next character")
 	}
-	if err := m.charge(ctx, len(p.Text)); err != nil {
+	out := passageJSON(in.BookID, p)
+	used := len(p.Text) + addTextTitle(out, "chapter_title", p.Title, allow-len(p.Text))
+	if err := m.charge(ctx, used); err != nil {
 		return nil, err
 	}
-	out := passageJSON(in.BookID, p)
 	out["chapter_length"] = len(c.Text)
 	out["content_notice"] = textNotice
 	if p.End < len(c.Text) {
@@ -491,10 +498,11 @@ func (m *mcpService) readAt(ctx context.Context, raw json.RawMessage) (any, erro
 		extra["annotation_kind"] = string(ann.Kind)
 	}
 	p := t.Window(pl.ch, pl.off, before, after)
-	if err := m.charge(ctx, len(p.Text)); err != nil {
+	out := passageJSON(b.ID, p)
+	used := len(p.Text) + addTextTitle(out, "chapter_title", p.Title, allow-len(p.Text))
+	if err := m.charge(ctx, used); err != nil {
 		return nil, err
 	}
-	out := passageJSON(b.ID, p)
 	out["located_by"] = pl.by
 	out["place_offset"] = pl.off
 	out["place_progression"] = t.Progression(pl.ch, pl.off)
@@ -592,6 +600,7 @@ func (m *mcpService) searchText(ctx context.Context, raw json.RawMessage) (any, 
 		}
 		used += len(p.Text)
 		entry := passageJSON(b.ID, p)
+		used += addTextTitle(entry, "chapter_title", p.Title, allow-used)
 		delete(entry, "book_id")
 		entry["offset"] = h.Offset
 		entry["progression"] = t.Progression(h.Chapter, h.Offset)
@@ -683,9 +692,6 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 		perName[h.Term]++
 		if n := len(perChapter); n == 0 || perChapter[n-1]["chapter"] != h.Chapter {
 			entry := map[string]any{"chapter": h.Chapter, "count": 0}
-			if title := t.Chapters[h.Chapter].Title; title != "" {
-				entry["title"] = title
-			}
 			perChapter = append(perChapter, entry)
 		}
 		perChapter[len(perChapter)-1]["count"] = perChapter[len(perChapter)-1]["count"].(int) + 1
@@ -727,14 +733,12 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 		}
 		used += len(p.Text)
 		entry := passageJSON(b.ID, p)
+		used += addTextTitle(entry, "chapter_title", p.Title, allow-used)
 		delete(entry, "book_id")
 		entry["name"] = in.Names[h.Term]
 		entry["offset"] = h.Offset
 		entry["progression"] = t.Progression(h.Chapter, h.Offset)
 		occurrences = append(occurrences, entry)
-	}
-	if err := m.charge(ctx, used); err != nil {
-		return nil, err
 	}
 	out["occurrences"] = occurrences
 	if next < len(hits) {
@@ -742,6 +746,17 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 	}
 	if next == skip && next < len(hits) {
 		return nil, mcp.Errorf("the hourly book text allowance is too low to return an occurrence")
+	}
+	for _, chapter := range perChapter {
+		title := t.Chapters[chapter["chapter"].(int)].Title
+		n := addTextTitle(chapter, "title", title, allow-used)
+		used += n
+		if title != "" && n == 0 {
+			out["titles_truncated"] = true
+		}
+	}
+	if err := m.charge(ctx, used); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

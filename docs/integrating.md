@@ -2099,6 +2099,8 @@ build a picture of a character without reading ahead. Book text is
 returned as a quotation, never as instructions, and is limited per call
 and per connection per hour; past the hourly limit a text tool returns
 an error until the window moves on.
+Chapter titles count against the text allowance. A chapter listing may
+omit titles that do not fit and reports `titles_truncated` when it does.
 
 Each POST carries one JSON-RPC message; batches are refused. Requests
 that send an `Origin` must match the server's public URL. A connection

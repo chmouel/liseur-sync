@@ -730,7 +730,7 @@ func TestMCPReadChapterRefusesIncompleteCharacter(t *testing.T) {
 	f := newFolderFixture(t)
 	f.enableMCP(t, func(c *config.MCPConfig) {
 		c.TextBytesPerCall = 1024
-		c.TextBytesPerHour = 1025
+		c.TextBytesPerHour = 1025 + int64(len("Loomings"))
 	})
 	prefix := "Loomings\nChapter one.\n"
 	body := strings.Repeat("a", 1024-len(prefix)) + "éclair"
@@ -745,6 +745,81 @@ func TestMCPReadChapterRefusesIncompleteCharacter(t *testing.T) {
 	if out != nil || !strings.Contains(errText, "allowance is too low") {
 		t.Fatalf("incomplete character: %v %q", out, errText)
 	}
+}
+
+func TestMCPChapterTitlesCountTowardsTextLimits(t *testing.T) {
+	f := newFolderFixture(t)
+	bookID, digest := f.writeBook(t, "moby.epub", chapterEPUB(t))
+	title := strings.Repeat("é", booktext.MaxTitleBytes/2)
+	text := &booktext.Book{}
+	for i := range 12 {
+		text.Chapters = append(text.Chapters, booktext.Chapter{
+			Index: i, Href: fmt.Sprintf("chapter%d.xhtml", i), Title: title,
+			Text: "Alice went home.", StartProg: float64(i) / 12, EndProg: float64(i+1) / 12,
+		})
+	}
+	f.srv.BookTexts = NewBookTextCache(0)
+	f.srv.BookTexts.put(digest, text)
+	f.enableMCP(t, func(c *config.MCPConfig) {
+		c.TextBytesPerCall = 1024
+		c.TextBytesPerHour = 2048
+	})
+	titleBytes := func(t *testing.T, v map[string]any, key string) int {
+		t.Helper()
+		s, _ := v[key].(string)
+		if len(s) > booktext.MaxTitleBytes {
+			t.Fatalf("unbounded title: %d bytes", len(s))
+		}
+		return len(s)
+	}
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeText)
+	for range 2 {
+		out := f.mustCall(t, access, "list_chapters", map[string]any{"book_id": bookID})
+		used := 0
+		for _, v := range out["chapters"].([]any) {
+			used += titleBytes(t, v.(map[string]any), "title")
+		}
+		if used != 1024 || out["titles_truncated"] != true {
+			t.Fatalf("chapter titles: %d bytes, %v", used, out)
+		}
+	}
+	if _, errText := f.call(t, access, "list_chapters", map[string]any{"book_id": bookID}); !strings.Contains(errText, "allowance is spent") {
+		t.Fatalf("titles were not charged: %q", errText)
+	}
+	for _, tool := range []string{"book_outline", "read_chapter", "read_at", "search_text", "find_mentions"} {
+		t.Run(tool, func(t *testing.T) {
+			access := f.assistantToken(t, f.user.ID, oauth.ScopeText)
+			args := map[string]any{"book_id": bookID}
+			switch tool {
+			case "read_chapter":
+				args["chapter"] = 0
+			case "read_at":
+				args["progression"] = 0.5
+			case "search_text":
+				args["query"] = "Alice"
+			case "find_mentions":
+				args["names"] = []string{"Alice"}
+			}
+			out := f.mustCall(t, access, tool, args)
+			used := lenString(out["text"]) + titleBytes(t, out, "chapter_title")
+			for _, key := range []string{"chapters", "results", "occurrences", "by_chapter"} {
+				list, _ := out[key].([]any)
+				for _, v := range list {
+					entry := v.(map[string]any)
+					used += lenString(entry["text"]) + lenString(entry["opening"])
+					used += titleBytes(t, entry, "title") + titleBytes(t, entry, "chapter_title")
+				}
+			}
+			if used == 0 || used > 1024 {
+				t.Fatalf("%s returned %d bytes of book text", tool, used)
+			}
+		})
+	}
+}
+
+func lenString(v any) int {
+	s, _ := v.(string)
+	return len(s)
 }
 
 func asJSON(v any) string {
