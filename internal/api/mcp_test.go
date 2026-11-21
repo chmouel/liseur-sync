@@ -273,6 +273,16 @@ func TestMCPWorkStatsRespectReadingScope(t *testing.T) {
 	}
 }
 
+func TestMCPStatsSummaryDateOrder(t *testing.T) {
+	f := newFolderFixture(t)
+	f.enableMCP(t, nil)
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeInsights)
+	if _, msg := f.call(t, access, "get_stats_summary", map[string]any{"from": "2024-02-01", "to": "2024-01-31"}); msg == "" {
+		t.Fatal("reversed dates accepted")
+	}
+	f.mustCall(t, access, "get_stats_summary", map[string]any{"from": "2024-02-01", "to": "2024-02-01"})
+}
+
 func TestMCPCalendarReportsSnapshotRevision(t *testing.T) {
 	f := newFolderFixture(t)
 	f.enableMCP(t, nil)
