@@ -30,9 +30,15 @@ async function run() {
     ws.addEventListener('error', reject, { once: true });
   });
   let nextID = 0;
+  let dialogs = 0;
   const pending = new Map();
   ws.addEventListener('message', event => {
     const message = JSON.parse(event.data);
+    if (message.method === 'Page.javascriptDialogOpening') {
+      dialogs++;
+      void send('Page.handleJavaScriptDialog', { accept: dialogs === 2 }, message.sessionId);
+      return;
+    }
     if (!pending.has(message.id)) return;
     const { resolve, reject } = pending.get(message.id);
     pending.delete(message.id);
@@ -79,6 +85,15 @@ async function run() {
   await waitFor('!!document.querySelector("button[name=decision][value=allow]")', 'consent after same-site continuation');
   await evaluate('document.querySelector("button[name=decision][value=allow]").click()');
   await waitFor('location.pathname === "/callback" && document.body.textContent.includes("Callback received")', 'OAuth callback');
+  await call('Page.navigate', { url: process.env.OAUTH_ISSUER + '/ui/settings?section=admin&view=assistants' });
+  const toggle = 'form[action$="admin/oauth/chatgpt"] button';
+  await waitFor(`document.readyState === "complete" && document.querySelector('${toggle}')?.textContent.includes('Stop allowing')`, 'ChatGPT administration');
+  await evaluate(`document.querySelector('${toggle}').click()`);
+  if (dialogs !== 1) throw new Error('Cancel did not show a confirmation');
+  await waitFor(`document.querySelector('${toggle}')?.textContent.includes('Stop allowing')`, 'cancelled removal');
+  await evaluate(`document.querySelector('${toggle}').click()`);
+  if (dialogs !== 2) throw new Error('Removal did not show a confirmation');
+  await waitFor(`document.querySelector('${toggle}')?.textContent.includes('Allow ChatGPT')`, 'confirmed removal');
 }
 
 try {

@@ -295,7 +295,8 @@ func (s *Server) handleAdminChatGPT(w http.ResponseWriter, r *http.Request, a st
 	}
 	var err error
 	flash := Flash{}
-	if r.FormValue("allow") == "on" {
+	switch r.FormValue("allow") {
+	case "on":
 		err = s.St.CreateOAuthClient(r.Context(), store.OAuthClient{
 			ID: oauth.ChatGPTMetadataURL, Kind: store.OAuthClientMetadata,
 			Name: "ChatGPT", CreatedAt: time.Now().UTC(),
@@ -304,7 +305,7 @@ func (s *Server) handleAdminChatGPT(w http.ResponseWriter, r *http.Request, a st
 			err = nil
 		}
 		flash.Notice = "ChatGPT can now ask readers to connect."
-	} else {
+	case "off":
 		err = s.St.DeleteOAuthClient(r.Context(), oauth.ChatGPTMetadataURL)
 		if errors.Is(err, store.ErrNotFound) {
 			err = nil
@@ -313,6 +314,9 @@ func (s *Server) handleAdminChatGPT(w http.ResponseWriter, r *http.Request, a st
 			s.OAuth.Fetcher.Forget(oauth.ChatGPTMetadataURL)
 		}
 		flash.Notice = "ChatGPT is no longer allowed. Every ChatGPT connection was cut."
+	default:
+		http.Error(w, "invalid action", http.StatusBadRequest)
+		return
 	}
 	logAdminAction(r, u, "oauth.chatgpt", r.FormValue("allow"), err)
 	if err != nil {

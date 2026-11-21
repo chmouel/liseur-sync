@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -57,6 +59,13 @@ func TestOAuthConsentInRealBrowser(t *testing.T) {
 	if err := st.CreateUser(t.Context(), store.User{ID: "u1", Name: "alice", Argon2Hash: hash, CreatedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateOAuthClient(t.Context(), store.OAuthClient{ID: oauth.ChatGPTMetadataURL, Kind: store.OAuthClientMetadata,
+		Name: "ChatGPT", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.CreateOAuthClient(t.Context(), store.OAuthClient{ID: "lsc_browser", Kind: store.OAuthClientRegistered,
 		Name: "Browser Assistant", RedirectURIs: []string{redirect}, CreatedAt: time.Now()}); err != nil {
 		t.Fatal(err)
@@ -76,7 +85,13 @@ func TestOAuthConsentInRealBrowser(t *testing.T) {
 	mux.Handle("POST /mcp", s.OAuth.RequireToken(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})))
-	issuer.Config.Handler = mux
+	var chatGPTPosts atomic.Int32
+	issuer.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/ui/admin/oauth/chatgpt" {
+			chatGPTPosts.Add(1)
+		}
+		mux.ServeHTTP(w, r)
+	})
 	issuer.StartTLS()
 	defer issuer.Close()
 	verifier := strings.Repeat("a", 64)
@@ -96,6 +111,12 @@ func TestOAuthConsentInRealBrowser(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("browser consent flow: %v\n%s", err, out)
+	}
+	if chatGPTPosts.Load() != 1 {
+		t.Fatalf("confirmation submitted %d disable requests", chatGPTPosts.Load())
+	}
+	if _, err := st.OAuthClient(t.Context(), oauth.ChatGPTMetadataURL); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("confirmed removal: %v", err)
 	}
 	var code string
 	select {
