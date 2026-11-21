@@ -323,28 +323,41 @@ func (m *mcpService) searchLibrary(ctx context.Context, raw json.RawMessage) (an
 		return nil, err
 	}
 	userID := mcpUser(ctx)
-	folders, err := m.s.St.ListFolders(ctx, userID, "", 100)
-	if err != nil {
-		return nil, err
-	}
 	var found []store.CatalogBook
 	seen := map[string]bool{}
 	truncated := false
-	for _, f := range folders {
-		res, err := m.s.St.SearchCatalogBooks(ctx, store.SearchQuery{FolderID: f.ID, UserID: userID, Text: in.Query, Limit: limit})
-		if errors.Is(err, store.ErrNotFound) {
-			continue
-		}
+	after := ""
+	for {
+		folders, err := m.s.St.ListFolders(ctx, userID, after, 100)
 		if err != nil {
 			return nil, err
 		}
-		truncated = truncated || res.Truncated
-		for _, b := range res.Books {
-			if !seen[b.ID] {
-				seen[b.ID] = true
-				found = append(found, b)
+		for _, f := range folders {
+			res, err := m.s.St.SearchCatalogBooks(ctx, store.SearchQuery{FolderID: f.ID, UserID: userID, Text: in.Query, Limit: limit})
+			if errors.Is(err, store.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			truncated = truncated || res.Truncated
+			for _, b := range res.Books {
+				if !seen[b.ID] {
+					seen[b.ID] = true
+					found = append(found, b)
+				}
+			}
+			if len(found) > limit {
+				truncated = true
+			}
+			if truncated && len(found) >= limit {
+				break
 			}
 		}
+		if truncated && len(found) >= limit || len(folders) < 100 {
+			break
+		}
+		after = store.FolderCursor(folders[len(folders)-1])
 	}
 	if len(found) > limit {
 		found, truncated = found[:limit], true

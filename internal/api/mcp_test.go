@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -327,6 +328,39 @@ func TestMCPReadsOnlyTheGrantedLibrary(t *testing.T) {
 		if _, errText := f.call(t, theirs, tool, map[string]any{"book_id": bookID, "chapter": ch}); errText == "" {
 			t.Errorf("%s answered for a book outside the reader's folders", tool)
 		}
+	}
+}
+
+func TestMCPSearchesBeyondFirstFolderPage(t *testing.T) {
+	f := newFolderFixture(t)
+	f.enableMCP(t, nil)
+	bookID, _ := f.writeBook(t, "moby.epub", chapterEPUB(t))
+	for i := range 105 {
+		id := fmt.Sprintf("early-%03d", i)
+		folder := store.Folder{ID: id, Name: "A", RootPath: filepath.Join(f.root, id), Kind: store.FolderPlain}
+		if err := f.st.CreateFolder(t.Context(), folder); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.st.AssignUserFolder(t.Context(), f.user.ID, folder.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeLibrary)
+	out := f.mustCall(t, access, "search_library", map[string]any{"query": "Moby"})
+	books := out["books"].([]any)
+	if len(books) != 1 || books[0].(map[string]any)["book_id"] != bookID || out["truncated"] != false {
+		t.Fatalf("search beyond first folder page: %v", out)
+	}
+	now := time.Now().UTC()
+	if _, err := f.st.ReconcileFolder(t.Context(), "early-000", []store.ObservedBook{{
+		RelativePath: "other.epub", OriginalFilename: "other.epub", MediaType: "application/epub+zip",
+		SizeBytes: 1, MTime: now, ContentSHA256: "other-sha", Title: "Moby Another",
+	}}, true, now); err != nil {
+		t.Fatal(err)
+	}
+	out = f.mustCall(t, access, "search_library", map[string]any{"query": "Moby", "limit": 1})
+	if len(out["books"].([]any)) != 1 || out["truncated"] != true {
+		t.Fatalf("matches across folder pages were not marked truncated: %v", out)
 	}
 }
 
