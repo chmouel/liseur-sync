@@ -77,6 +77,28 @@ func TestHTMLTextAfterSelfClosingRawTextTags(t *testing.T) {
 	}
 }
 
+func TestInlineHeadingKeepsTextAndSkipsOpening(t *testing.T) {
+	text, title := htmlText([]byte(`<html><body><h1>Un<em>break</em>able &amp; fine</h1><p>It began with a long journey. The end.</p></body></html>`))
+	if title != "Unbreakable & fine" || !strings.HasPrefix(text, title+"\n") {
+		t.Fatalf("heading %q, text %q", title, text)
+	}
+	chapter := Chapter{Title: title, Text: text}
+	if got := chapter.FirstSentence(200); got != "It began with a long journey." {
+		t.Fatalf("opening: %q", got)
+	}
+}
+
+func TestMultilineHeadingKeepsTitleAndSkipsOpening(t *testing.T) {
+	text, title := htmlText([]byte(`<html><body><h1>Chapter 1<br/>Arrival</h1><p>It began with a long journey. The end.</p></body></html>`))
+	if title != "Chapter 1 Arrival" {
+		t.Fatalf("heading %q, text %q", title, text)
+	}
+	chapter := Chapter{Title: title, Text: text}
+	if got := chapter.FirstSentence(200); got != "It began with a long journey." {
+		t.Fatalf("opening: %q", got)
+	}
+}
+
 func TestChapterTitleBounds(t *testing.T) {
 	long := strings.Repeat("é", MaxTitleBytes)
 	_, heading := htmlText([]byte("<html><body><h1>" + long + "</h1></body></html>"))
