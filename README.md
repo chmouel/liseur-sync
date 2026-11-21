@@ -88,6 +88,8 @@ A book can also carry an audiobook: `.m4b` files are picked up from the same fol
 
 Catalogs are exposed through the web UI, REST API, and OPDS.
 
+The library page can also hand its list over as a CSV file: the export carries the folder, filter and ordering that are on screen, and covers every page of them, not just the one being looked at. The CSV button opens a preview with copy and download beside it.
+
 ![Book details](docs/screenshots/book.png)
 
 ### Folder access
