@@ -2,6 +2,9 @@ package webui
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"html"
 	"net"
@@ -11,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,10 +72,20 @@ func TestOAuthConsentInRealBrowser(t *testing.T) {
 	s := &Server{St: st, Auth: auth.NewService(st), Cfg: cfg, OAuth: oauth.New(st, cfg)}
 	mux := http.NewServeMux()
 	s.Mount(mux, func(h http.Handler) http.Handler { return auth.RequireSecureTransport(cfg, h) })
+	mux.HandleFunc("POST /oauth/token", s.OAuth.HandleToken)
+	mux.Handle("POST /mcp", s.OAuth.RequireToken(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})))
 	issuer.Config.Handler = mux
 	issuer.StartTLS()
 	defer issuer.Close()
-	query := authorizeQuery(func(q url.Values) { q.Set("client_id", "lsc_browser"); q.Set("redirect_uri", redirect) })
+	verifier := strings.Repeat("a", 64)
+	challenge := sha256.Sum256([]byte(verifier))
+	query := authorizeQuery(func(q url.Values) {
+		q.Set("client_id", "lsc_browser")
+		q.Set("redirect_uri", redirect)
+		q.Set("code_challenge", base64.RawURLEncoding.EncodeToString(challenge[:]))
+	})
 	authorizationURL = cfg.MCP.PublicURL + "/ui/oauth/authorize?" + query
 	client.StartTLS()
 	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
@@ -83,12 +97,69 @@ func TestOAuthConsentInRealBrowser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("browser consent flow: %v\n%s", err, out)
 	}
+	var code string
 	select {
 	case q := <-callback:
 		if q.Get("state") != "xyz" || q.Get("code") == "" || q.Get("iss") != cfg.MCP.PublicURL {
 			t.Fatal("callback is missing the authorization response")
 		}
+		code = q.Get("code")
 	case <-time.After(time.Second):
 		t.Fatal("client did not receive the callback")
+	}
+	type tokenResponse struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		Error        string `json:"error"`
+	}
+	tokenRequest := func(form url.Values) (int, tokenResponse) {
+		t.Helper()
+		resp, err := issuer.Client().PostForm(issuer.URL+oauth.TokenPath, form)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var body tokenResponse
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, body
+	}
+	status, tokens := tokenRequest(url.Values{
+		"grant_type": {"authorization_code"}, "client_id": {"lsc_browser"}, "code": {code},
+		"code_verifier": {verifier}, "redirect_uri": {redirect},
+	})
+	if status != http.StatusOK || tokens.AccessToken == "" || tokens.RefreshToken == "" {
+		t.Fatalf("code exchange failed: status %d", status)
+	}
+	refresh := tokens.RefreshToken
+	form := url.Values{"grant_type": {"refresh_token"}, "client_id": {"lsc_browser"}, "refresh_token": {refresh}}
+	status, rotated := tokenRequest(form)
+	if status != http.StatusOK || rotated.AccessToken == "" || rotated.RefreshToken == "" || rotated.RefreshToken == refresh {
+		t.Fatalf("refresh rotation failed: status %d", status)
+	}
+	accessStatus := func(token string) int {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, issuer.URL+"/mcp", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := issuer.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if status := accessStatus(rotated.AccessToken); status != http.StatusNoContent {
+		t.Fatalf("rotated access token: %d", status)
+	}
+	status, replay := tokenRequest(form)
+	if status != http.StatusBadRequest || replay.Error != "invalid_grant" {
+		t.Fatalf("refresh replay: status %d", status)
+	}
+	if status := accessStatus(rotated.AccessToken); status != http.StatusUnauthorized {
+		t.Fatalf("replayed refresh did not revoke the access token: %d", status)
 	}
 }
