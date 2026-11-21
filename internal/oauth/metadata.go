@@ -11,11 +11,14 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"golang.org/x/net/idna"
 )
 
 // ChatGPTMetadataURL is the Client ID Metadata Document ChatGPT
@@ -320,21 +323,59 @@ func clampName(name string) string {
 // loopback address for a native client (RFC 8252 §7.3). Fragments are
 // never allowed, and comparison later is by exact string.
 func ValidateRedirectURI(raw string) error {
+	_, err := RedirectOrigin(raw)
+	return err
+}
+
+// RedirectOrigin validates a redirect URI and returns its CSP origin.
+func RedirectOrigin(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil || !utf8.ValidString(raw) || u.Host == "" || u.Hostname() == "" || u.Fragment != "" || u.User != nil || u.String() != raw {
-		return fmt.Errorf("redirect URI %q is not a plain absolute URL", raw)
+		return "", fmt.Errorf("redirect URI %q is not a plain absolute URL", raw)
+	}
+	host := u.Hostname()
+	ip, ipErr := netip.ParseAddr(host)
+	if strings.HasPrefix(u.Host, "[") {
+		if ipErr != nil || !ip.Is6() || ip.Zone() != "" {
+			return "", fmt.Errorf("redirect URI %q has an invalid host", raw)
+		}
+	} else if strings.Contains(host, ":") {
+		return "", fmt.Errorf("redirect URI %q has an invalid host", raw)
+	}
+	if strings.HasSuffix(u.Host, ":") {
+		return "", fmt.Errorf("redirect URI %q has an empty port", raw)
+	}
+	port := u.Port()
+	if port != "" {
+		if n, err := strconv.ParseUint(port, 10, 16); err != nil || n == 0 {
+			return "", fmt.Errorf("redirect URI %q has an invalid port", raw)
+		}
 	}
 	switch u.Scheme {
 	case "https":
-		return nil
 	case "http":
-		host := u.Hostname()
-		if ip, err := netip.ParseAddr(host); err == nil && ip.IsLoopback() {
-			return nil
+		if (ipErr != nil || !ip.IsLoopback()) && !strings.EqualFold(host, "localhost") {
+			return "", fmt.Errorf("redirect URI %q must be https, or http on a loopback address", raw)
 		}
-		if host == "localhost" {
-			return nil
+	default:
+		return "", fmt.Errorf("redirect URI %q must be https, or http on a loopback address", raw)
+	}
+	if ipErr == nil && ip.Is6() {
+		host = "[" + ip.String() + "]"
+	} else {
+		host, err = idna.Lookup.ToASCII(host)
+		if err != nil || host == "" {
+			return "", fmt.Errorf("redirect URI %q has an invalid host", raw)
+		}
+		for _, c := range host {
+			ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-'
+			if !ok {
+				return "", fmt.Errorf("redirect URI %q has an invalid host", raw)
+			}
 		}
 	}
-	return fmt.Errorf("redirect URI %q must be https, or http on a loopback address", raw)
+	if port != "" {
+		host += ":" + port
+	}
+	return u.Scheme + "://" + host, nil
 }

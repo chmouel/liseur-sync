@@ -194,6 +194,54 @@ func TestOAuthConsentFlow(t *testing.T) {
 	}
 }
 
+func TestOAuthConsentInternationalizedRedirect(t *testing.T) {
+	ts, st := assistantsServer(t)
+	redirect := "https://b%C3%BCcher.example:8443/callback"
+	if err := st.CreateOAuthClient(t.Context(), store.OAuthClient{
+		ID: "lsc_idn", Kind: store.OAuthClientRegistered, Name: "International client",
+		RedirectURIs: []string{redirect}, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	query := authorizeQuery(func(q url.Values) { q.Set("client_id", "lsc_idn"); q.Set("redirect_uri", redirect) })
+	cookie := loginCookie(t, ts)
+	resp := getWith(t, ts, cookie, "/ui/oauth/authorize?"+query, nil)
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(resp.Header.Get("Content-Security-Policy"), "form-action 'self' https://xn--bcher-kva.example:8443;") {
+		t.Fatalf("consent CSP: %d %q", resp.StatusCode, resp.Header.Get("Content-Security-Policy"))
+	}
+	form, err := url.ParseQuery(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form.Set("csrf", extractCSRF(t, body))
+	form.Set("decision", "allow")
+	form.Set("grant", "mcp:library")
+	resp = postRaw(t, ts, cookie, "/ui/oauth/authorize", form)
+	readBody(t, resp)
+	if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(resp.Header.Get("Location"), redirect+"?") {
+		t.Fatalf("callback: %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
+func TestOAuthRedirectOrigin(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://b%C3%BCcher.example:8443/cb": "https://xn--bcher-kva.example:8443",
+		"https://xn--bcher-kva.example/cb":    "https://xn--bcher-kva.example",
+		"http://[::1]:8123/cb":                "http://[::1]:8123",
+		"https://a_b.example/cb":              "",
+		"https://client.example:0/cb":         "",
+		"https://client.example:65536/cb":     "",
+		"https://client.example:/cb":          "",
+		"https://[fe80::1%25eth0]/cb":         "",
+	} {
+		err := oauth.ValidateRedirectURI(raw)
+		if got := cspOrigin(raw); got != want || (err == nil) != (want != "") {
+			t.Errorf("redirect %q: origin %q, error %v", raw, got, err)
+		}
+	}
+}
+
 func TestOAuthConsentContinuationBounds(t *testing.T) {
 	ts, st := assistantsServer(t)
 	query := authorizeQuery(func(q url.Values) { q.Set("ignored", strings.Repeat("x", 9000)) })

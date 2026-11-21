@@ -52,21 +52,9 @@ func consentPolicy(redirectURI string) string {
 	return strings.Replace(uiPolicy, "form-action 'self'", "form-action 'self' "+origin, 1)
 }
 
-// cspOrigin returns scheme://host[:port] when every character of it is
-// safe inside a CSP source list, and nothing otherwise.
 func cspOrigin(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return ""
-	}
-	for _, c := range u.Host {
-		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
-			c == '.' || c == '-' || c == ':' || c == '[' || c == ']'
-		if !ok {
-			return ""
-		}
-	}
-	return u.Scheme + "://" + u.Host
+	origin, _ := oauth.RedirectOrigin(raw)
+	return origin
 }
 
 // scopeTitle is the consent screen's name for a scope.
