@@ -57,8 +57,19 @@ func TestTransportRefusals(t *testing.T) {
 	if w, _ := post(t, s, `{"jsonrpc":"2.0","id":1,"method":"ping"}`, "Origin", "https://sync.example"); w.Code != http.StatusOK {
 		t.Fatalf("own origin: %d", w.Code)
 	}
-	r := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	r := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	r.Header.Add("Origin", "https://sync.example")
+	r.Header.Add("Origin", "https://evil.example")
 	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("multiple origins: %d", w.Code)
+	}
+	if w, _ := post(t, s, `{"jsonrpc":"2.0","id":1,"method":"ping"}`, "Origin", ""); w.Code != http.StatusForbidden {
+		t.Fatalf("empty origin: %d", w.Code)
+	}
+	r = httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	w = httptest.NewRecorder()
 	s.ServeHTTP(w, r)
 	if w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != http.MethodPost {
 		t.Fatalf("GET: %d %q", w.Code, w.Header().Get("Allow"))
@@ -80,6 +91,39 @@ func TestTransportRefusals(t *testing.T) {
 	}
 	if w, _ := post(t, s, `{"jsonrpc":"2.0","id":1,"method":"ping","x":"`+strings.Repeat("a", bodyMax)+`"}`); w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversize: %d", w.Code)
+	}
+}
+
+func TestTransportOriginPorts(t *testing.T) {
+	for _, tc := range []struct {
+		configured, origin string
+		allowed            bool
+	}{
+		{"https://sync.example:443", "https://sync.example", true},
+		{"https://sync.example", "https://SYNC.example:443", true},
+		{"http://sync.example:80", "http://sync.example", true},
+		{"https://sync.example:8443", "https://sync.example:8443", true},
+		{"https://[2001:db8::1]:443", "https://[2001:0db8:0:0:0:0:0:1]", true},
+		{"https://sync.example:8443", "https://sync.example", false},
+		{"https://sync.example", "http://sync.example:443", false},
+		{"https://sync.example", "https://evil.example", false},
+		{"https://sync.example", "https://sync.example/path", false},
+		{"https://sync.example", "https://user@sync.example", false},
+		{"https://sync.example", "https://sync.example?x=1", false},
+		{"https://sync.example", "https://sync.example#", false},
+		{"https://sync.example", "https://sync.example:", false},
+		{"https://sync.example", "https://[sync.example]", false},
+		{"https://[2001:db8::1]", "https://2001:db8::1:443", false},
+	} {
+		s := New("test", tc.configured, nil, nil)
+		w, _ := post(t, s, `{"jsonrpc":"2.0","id":1,"method":"ping"}`, "Origin", tc.origin)
+		want := http.StatusForbidden
+		if tc.allowed {
+			want = http.StatusOK
+		}
+		if w.Code != want {
+			t.Errorf("configured %q, origin %q: status %d", tc.configured, tc.origin, w.Code)
+		}
 	}
 }
 
