@@ -46,6 +46,7 @@ On an Xteink running CrossPoint, pair CrossPoint Sync with a code from the Devic
 * optional mirroring of an account's positions to another server
 * per-user series claims
 * a per-account sentence translation cache.
+* optional MCP server for connecting AI assistants such as ChatGPT, allowing readers to ask questions about their books, reading progress, highlights and characters withouth spoiler.
 
 API documentation is available in [docs/openapi.yaml](docs/openapi.yaml).
 
