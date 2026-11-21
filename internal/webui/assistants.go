@@ -113,12 +113,17 @@ func (s *Server) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 	a, u, ok := s.session(r)
 	if !ok {
-		self := "authorize?" + r.URL.RawQuery
-		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
-			oauthContinuePage(prefix, uiCtx(r, nil), self, req.Client.Name).Render(r.Context(), w)
+		query := req.Params().Encode()
+		next := oauthNext(oauthNextPrefix + query)
+		if next == "" {
+			s.oauthFail(w, r, &oauth.AuthorizeError{Code: "invalid_request", Description: "the authorization request is too long"})
 			return
 		}
-		loginPage(prefix, uiCtx(r, nil), "", oauthNext(oauthNextPrefix+r.URL.RawQuery)).Render(r.Context(), w)
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			oauthContinuePage(prefix, uiCtx(r, nil), "authorize?"+query, req.Client.Name).Render(r.Context(), w)
+			return
+		}
+		loginPage(prefix, uiCtx(r, nil), "", next).Render(r.Context(), w)
 		return
 	}
 	s.renewSession(w, r, a)

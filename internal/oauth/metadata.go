@@ -23,6 +23,7 @@ import (
 const ChatGPTMetadataURL = "https://chatgpt.com/oauth/client.json"
 
 const (
+	maxClientIDBytes = 512
 	metadataMaxBytes = 64 << 10
 	metadataTimeout  = 5 * time.Second
 	metadataCacheTTL = 15 * time.Minute
@@ -151,6 +152,9 @@ func PublicAddr(ip netip.Addr) bool {
 // must have: HTTPS, a path, and nothing that lets two spellings of one
 // client compare unequal.
 func ValidateMetadataURL(raw string) error {
+	if len(raw) > maxClientIDBytes {
+		return errors.New("client metadata URL is too long")
+	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil ||
 		u.Fragment != "" || u.RawQuery != "" || u.ForceQuery || u.Hostname() == "" || u.Path == "" || u.Path == "/" ||

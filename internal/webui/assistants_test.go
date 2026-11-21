@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -104,7 +105,10 @@ func TestOAuthConsentFlow(t *testing.T) {
 	if !strings.Contains(body, `name="password"`) || !strings.Contains(body, `name="next"`) {
 		t.Fatalf("no login form with next: %s", body)
 	}
-	next := oauthNextPrefix + authorizeQuery(nil)
+	next := oauthNextPrefix + authorizeQuery(func(q url.Values) { q.Set("resource", "https://books.example/mcp") })
+	if !strings.Contains(html.UnescapeString(body), `name="next" value="`+next+`"`) {
+		t.Fatalf("login continuation missing validated parameters: %s", body)
+	}
 	resp = postRaw(t, ts, nil, "/ui/login", url.Values{
 		"username": {"alice"}, "password": {"hunter2hunter"}, "next": {next},
 	})
@@ -176,6 +180,45 @@ func TestOAuthConsentFlow(t *testing.T) {
 	loc, _ = url.Parse(resp.Header.Get("Location"))
 	if loc.Query().Get("error") != "access_denied" || loc.Query().Get("code") != "" {
 		t.Fatalf("deny: %s", loc)
+	}
+}
+
+func TestOAuthConsentContinuationBounds(t *testing.T) {
+	ts, st := assistantsServer(t)
+	query := authorizeQuery(func(q url.Values) { q.Set("ignored", strings.Repeat("x", 9000)) })
+	for _, crossSite := range []bool{false, true} {
+		headers := map[string]string{}
+		if crossSite {
+			headers["Sec-Fetch-Site"] = "cross-site"
+		}
+		resp := getWith(t, ts, nil, "/ui/oauth/authorize?"+query, headers)
+		body := html.UnescapeString(readBody(t, resp))
+		if resp.StatusCode != http.StatusOK || strings.Contains(body, "ignored=") {
+			t.Fatalf("cross-site %t: %d, continuation contains ignored parameters", crossSite, resp.StatusCode)
+		}
+		if crossSite && !strings.Contains(body, `href="authorize?`) || !crossSite && !strings.Contains(body, `name="next" value="oauth/authorize?`) {
+			t.Fatalf("cross-site %t: missing continuation", crossSite)
+		}
+	}
+
+	redirect := "https://client.example/" + strings.Repeat("a", 8500)
+	if err := st.CreateOAuthClient(t.Context(), store.OAuthClient{
+		ID: "lsc_long", Kind: store.OAuthClientRegistered, Name: "Long redirect",
+		RedirectURIs: []string{redirect}, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	query = authorizeQuery(func(q url.Values) { q.Set("client_id", "lsc_long"); q.Set("redirect_uri", redirect) })
+	for _, crossSite := range []bool{false, true} {
+		headers := map[string]string{}
+		if crossSite {
+			headers["Sec-Fetch-Site"] = "cross-site"
+		}
+		resp := getWith(t, ts, nil, "/ui/oauth/authorize?"+query, headers)
+		body := readBody(t, resp)
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "authorization request is too long") {
+			t.Fatalf("cross-site %t: %d, expected explicit length error", crossSite, resp.StatusCode)
+		}
 	}
 }
 
