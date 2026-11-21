@@ -2103,6 +2103,8 @@ and per connection per hour; past the hourly limit a text tool returns
 an error until the window moves on.
 Chapter titles count against the text allowance. A chapter listing may
 omit titles that do not fit and reports `titles_truncated` when it does.
+An outline reports `openings_truncated` when the allowance shortens or
+omits chapter openings.
 
 Each POST carries one JSON-RPC message; batches are refused. Requests
 that send an `Origin` must match the server's public URL. A connection
