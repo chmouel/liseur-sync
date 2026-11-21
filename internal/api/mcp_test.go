@@ -401,6 +401,32 @@ func TestMCPReadAtBounds(t *testing.T) {
 	})
 }
 
+func TestMCPMentionAtReadingBoundary(t *testing.T) {
+	f := newFolderFixture(t)
+	f.enableMCP(t, nil)
+	bookID, sha := f.writeBook(t, "moby.epub", chapterEPUBWithText(t, "Mary Jane! A secret follows."))
+	_, resolved := f.resolveBook(t, bookID, f.token)
+	resp, body := f.postRaw(t, "/v1/ops", f.token, `{"ops":[{
+		"op_id":"position","work_id":"`+resolved.WorkID+`","edition_sha":"`+sha+`",
+		"client_ts":"2024-01-01T12:00:00Z","progression":0.5,
+		"locator":{"href":"OEBPS/chapter1.xhtml","text":{"highlight":"!"}}}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("push: %d %s", resp.StatusCode, body)
+	}
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeText, oauth.ScopeReading)
+	result := f.mustCall(t, access, "find_mentions", map[string]any{
+		"book_id": bookID, "names": []string{"Mary Jane"}, "up_to_current": true,
+	})
+	occurrences := result["occurrences"].([]any)
+	if len(occurrences) != 1 {
+		t.Fatalf("mentions: %v", result)
+	}
+	quote := occurrences[0].(map[string]any)["text"].(string)
+	if !strings.Contains(quote, "Mary Jane") || strings.Contains(quote, "!") || strings.Contains(quote, "secret") {
+		t.Fatalf("mention at boundary: %q", quote)
+	}
+}
+
 func TestMCPReadsAtAKOReaderPosition(t *testing.T) {
 	f := newFolderFixture(t)
 	f.enableMCP(t, nil)
