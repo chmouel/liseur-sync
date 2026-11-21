@@ -43,7 +43,7 @@ var Scopes = []ScopeInfo{
 	{ScopeReading, "Your reading", "See what you are reading, where you are in each book, and your highlights, notes and bookmarks."},
 	{ScopeInsights, "Your statistics", "See your reading time, pace, streaks and calendar."},
 	{ScopeVocabulary, "Your vocabulary", "See saved words, definitions, notes and example sentences."},
-	{ScopeText, "Book text", "Read passages from your books: chapters, the text around your position or a highlight, and every place a name appears."},
+	{ScopeText, "Book text", "Read any chapter or passage from your books, including text beyond your reading position."},
 }
 
 // AllScopes returns every scope name.
