@@ -32,9 +32,8 @@ import (
 // leads somewhere, the page is fetched too, since a route that answers
 // 404 for this reader is as dead an end as no route at all.
 //
-// The front door is the one pattern that proves nothing: /ui/ matches
-// every unclaimed path under it and the handler 404s all but its own.
-const frontDoorPattern = "GET /ui/{$}"
+// The /ui/ fallback claims unknown paths but always answers 404.
+const notFoundPattern = "/ui/"
 
 var (
 	uiLinkAttr = regexp.MustCompile(
@@ -121,11 +120,11 @@ func TestEveryLinkAPageOffersLeadsSomewhere(t *testing.T) {
 		for _, link := range pageLinks(t, page, body) {
 			get, post := patternsFor(t, routes, link)
 			switch {
-			case get != "" && get != frontDoorPattern || link == "/ui/":
+			case get != "" && get != notFoundPattern || link == "/ui/":
 				if resp, _ := f.get(t, link, f.cookie); resp.StatusCode == http.StatusNotFound {
 					t.Errorf("%s offers %s, which answers 404", page, link)
 				}
-			case post != "":
+			case post != "" && post != notFoundPattern:
 				// A form target: routed, and not ours to submit.
 			default:
 				t.Errorf("%s offers %s, which no route answers", page, link)
@@ -223,7 +222,7 @@ func TestPaginationLinksLeadToTheNextPage(t *testing.T) {
 			t.Fatalf("%s: got %d, want 200", page, resp.StatusCode)
 		}
 		next := nextPageLink(t, page, body)
-		if get, _ := patternsFor(t, routes, next); get == "" || get == frontDoorPattern {
+		if get, _ := patternsFor(t, routes, next); get == "" || get == notFoundPattern {
 			t.Errorf("%s pages to %s, which no route answers", page, next)
 			continue
 		}

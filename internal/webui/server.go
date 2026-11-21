@@ -287,6 +287,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 		redirectRel(w, "library", http.StatusFound)
 	})
 	mux.Handle("GET /ui/{$}", sec(frontDoor))
+	mux.Handle("/ui/", http.NotFoundHandler())
 	mux.Handle("GET /ui/insights", sec(s.requireAuth(s.handleInsights)))
 	mux.Handle("GET /ui/login", sec(func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := s.session(r); ok {
