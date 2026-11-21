@@ -261,17 +261,21 @@ type Hit struct {
 	Term    int
 }
 
+type Position struct {
+	Chapter int
+	Offset  int
+}
+
 // Find returns the matches of terms (already folded with FoldQuery), in
 // reading order, on word boundaries when words is set. It stops after
 // limit hits and reports whether there were more. Chapters before
-// fromChapter are skipped, and nothing at or past stop (a whole-book
-// fraction, when positive) is returned.
-func (b *Book) Find(terms []string, words bool, fromChapter int, stop float64, limit int) ([]Hit, bool) {
+// fromChapter are skipped, and matches must end at or before stop.
+func (b *Book) Find(terms []string, words bool, fromChapter int, stop *Position, limit int) ([]Hit, bool) {
 	cache := map[rune]string{}
 	var hits []Hit
 	for ch := max(fromChapter, 0); ch < len(b.Chapters); ch++ {
 		c := &b.Chapters[ch]
-		if stop > 0 && c.StartProg >= stop {
+		if stop != nil && ch > stop.Chapter {
 			break
 		}
 		f := fold(c.Text, cache)
@@ -294,6 +298,12 @@ func (b *Book) Find(terms []string, words bool, fromChapter int, stop float64, l
 				off := int(f.orig[s])
 				last := int(f.orig[e-1])
 				_, size := utf8.DecodeRuneInString(c.Text[last:])
+				if stop != nil && ch == stop.Chapter && last+size > stop.Offset {
+					if off >= stop.Offset {
+						break
+					}
+					continue
+				}
 				chapterHits = append(chapterHits, Hit{Chapter: ch, Offset: off, Length: last + size - off, Term: ti})
 				termHits++
 				if termHits > limit {
@@ -306,9 +316,6 @@ func (b *Book) Find(terms []string, words bool, fromChapter int, stop float64, l
 		sort.SliceStable(chapterHits, func(i, j int) bool { return chapterHits[i].Offset < chapterHits[j].Offset })
 		chapterHits = dedupeOverlaps(chapterHits)
 		for _, h := range chapterHits {
-			if stop > 0 && b.Progression(ch, h.Offset) >= stop {
-				return hits, false
-			}
 			if len(hits) == limit {
 				return hits, true
 			}
