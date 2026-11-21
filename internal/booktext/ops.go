@@ -1,7 +1,6 @@
 package booktext
 
 import (
-	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -286,64 +285,48 @@ func (b *Book) Find(terms []string, words bool, fromChapter int, stop *Position,
 			break
 		}
 		f := fold(c.Text, cache)
-		var chapterHits []Hit
-		for ti, term := range terms {
-			if term == "" {
+		nextOffset := 0
+		for at := 0; at < len(f.text); {
+			offset := int(f.orig[at])
+			if stop != nil && ch == stop.Chapter && offset >= stop.Offset {
+				break
+			}
+			best := Hit{Chapter: ch, Offset: offset}
+			for at < len(f.text) && int(f.orig[at]) == offset {
+				start := at
+				at++
+				if offset < nextOffset || (words && start > 0 && f.text[start-1] != ' ') {
+					continue
+				}
+				for ti, term := range terms {
+					if term == "" || !strings.HasPrefix(f.text[start:], term) {
+						continue
+					}
+					end := start + len(term)
+					if words && end < len(f.text) && f.text[end] != ' ' {
+						continue
+					}
+					last := int(f.orig[end-1])
+					_, size := utf8.DecodeRuneInString(c.Text[last:])
+					endOffset := last + size
+					if stop != nil && ch == stop.Chapter && endOffset > stop.Offset {
+						continue
+					}
+					length := endOffset - offset
+					if length > best.Length || (length == best.Length && ti < best.Term) {
+						best.Length, best.Term = length, ti
+					}
+				}
+			}
+			if best.Length == 0 {
 				continue
 			}
-			termHits := 0
-			for at := 0; at <= len(f.text); {
-				i := strings.Index(f.text[at:], term)
-				if i < 0 {
-					break
-				}
-				s, e := at+i, at+i+len(term)
-				at = s + 1
-				if words && ((s > 0 && f.text[s-1] != ' ') || (e < len(f.text) && f.text[e] != ' ')) {
-					continue
-				}
-				off := int(f.orig[s])
-				last := int(f.orig[e-1])
-				_, size := utf8.DecodeRuneInString(c.Text[last:])
-				if stop != nil && ch == stop.Chapter && last+size > stop.Offset {
-					if off >= stop.Offset {
-						break
-					}
-					continue
-				}
-				chapterHits = append(chapterHits, Hit{Chapter: ch, Offset: off, Length: last + size - off, Term: ti})
-				termHits++
-				if termHits > limit {
-					// Later hits of this term cannot be among the
-					// first limit+1 of the chapter.
-					break
-				}
-			}
-		}
-		sort.SliceStable(chapterHits, func(i, j int) bool { return chapterHits[i].Offset < chapterHits[j].Offset })
-		chapterHits = dedupeOverlaps(chapterHits)
-		for _, h := range chapterHits {
 			if len(hits) == limit {
 				return hits, true
 			}
-			hits = append(hits, h)
+			hits = append(hits, best)
+			nextOffset = offset + best.Length
 		}
 	}
 	return hits, false
-}
-
-// dedupeOverlaps keeps the longest match where two terms hit the same
-// place ("Rodion" inside "Rodion Romanovich").
-func dedupeOverlaps(h []Hit) []Hit {
-	out := h[:0]
-	for _, x := range h {
-		if n := len(out); n > 0 && x.Offset < out[n-1].Offset+out[n-1].Length {
-			if x.Length > out[n-1].Length && x.Offset == out[n-1].Offset {
-				out[n-1] = x
-			}
-			continue
-		}
-		out = append(out, x)
-	}
-	return out
 }

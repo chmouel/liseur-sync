@@ -78,6 +78,18 @@ func TestFindMentions(t *testing.T) {
 	}
 }
 
+func TestFindLimitsDistinctHits(t *testing.T) {
+	b := &Book{Chapters: []Chapter{{Text: "aaaa ... aa"}}}
+	hits, more := b.Find([]string{"aa"}, false, 0, nil, 2)
+	if len(hits) != 2 || hits[0].Offset != 0 || hits[1].Offset != 2 || !more {
+		t.Fatalf("overlapping matches: %+v, more=%v", hits, more)
+	}
+	hits, more = b.Find([]string{"aa", "aaaa"}, false, 0, nil, 2)
+	if len(hits) != 2 || hits[0].Term != 1 || hits[1].Offset != 9 || more {
+		t.Fatalf("overlapping terms: %+v, more=%v", hits, more)
+	}
+}
+
 func TestFindFoldsDiacritics(t *testing.T) {
 	b := &Book{Chapters: []Chapter{{Text: "Hier, Émile a vu ÉMILE."}}, bytes: 1}
 	b.fillSpans()
