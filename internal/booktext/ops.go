@@ -1,6 +1,7 @@
 package booktext
 
 import (
+	"context"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -212,12 +213,22 @@ type folded struct {
 	orig []int32
 }
 
-func fold(s string, cache map[rune]string) folded {
+func fold(ctx context.Context, s string, cache map[rune]string) folded {
+	if ctx.Err() != nil {
+		return folded{}
+	}
 	var b strings.Builder
 	orig := make([]int32, 0, len(s)+1)
 	b.Grow(len(s))
 	space := true
+	nextCheck := 4096
 	for i, r := range s {
+		if i >= nextCheck {
+			if ctx.Err() != nil {
+				return folded{}
+			}
+			nextCheck = i + 4096
+		}
 		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
 			if !unicode.IsMark(r) {
 				space = true
@@ -249,7 +260,7 @@ func fold(s string, cache map[rune]string) folded {
 
 // FoldQuery normalizes a query or a name the way chapter text is folded
 // for matching.
-func FoldQuery(s string) string { return fold(s, map[rune]string{}).text }
+func FoldQuery(s string) string { return fold(context.Background(), s, map[rune]string{}).text }
 
 // Hit is one match: where it is and which term matched.
 type Hit struct {
@@ -268,7 +279,7 @@ type Position struct {
 // reading order, on word boundaries when words is set. It stops after
 // limit hits and reports whether there were more. Chapters before
 // fromChapter are skipped, and matches must end at or before stop.
-func (b *Book) Find(terms []string, words bool, fromChapter int, stop *Position, limit int) ([]Hit, bool) {
+func (b *Book) Find(ctx context.Context, terms []string, words bool, fromChapter int, stop *Position, limit int) ([]Hit, bool) {
 	cache := map[rune]string{}
 	var hits []Hit
 	for ch := max(fromChapter, 0); ch < len(b.Chapters); ch++ {
@@ -276,9 +287,19 @@ func (b *Book) Find(terms []string, words bool, fromChapter int, stop *Position,
 		if stop != nil && ch > stop.Chapter {
 			break
 		}
-		f := fold(c.Text, cache)
+		f := fold(ctx, c.Text, cache)
+		if ctx.Err() != nil {
+			return nil, false
+		}
 		nextOffset := 0
+		nextCheck := 4096
 		for at := 0; at < len(f.text); {
+			if at >= nextCheck {
+				if ctx.Err() != nil {
+					return nil, false
+				}
+				nextCheck = at + 4096
+			}
 			offset := int(f.orig[at])
 			if stop != nil && ch == stop.Chapter && offset >= stop.Offset {
 				break

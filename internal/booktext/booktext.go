@@ -243,6 +243,9 @@ func htmlText(doc []byte) (string, string) {
 	skip, inHeading, headingDone := 0, 0, false
 	for {
 		tt := z.Next()
+		if tt == html.SelfClosingTagToken {
+			z.NextIsNotRawText()
+		}
 		switch tt {
 		case html.ErrorToken:
 			return strings.TrimSpace(w.b.String()), boundedTitle(heading.String())

@@ -123,3 +123,23 @@ func TestBookTextCacheRetriesCanceledLoad(t *testing.T) {
 		t.Fatalf("retry: %v %v", got, err)
 	}
 }
+
+func TestBookTextScanRejectsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := scanBookText(ctx, &booktext.Book{}, []string{"test"}, false, nil, 1)
+	if err != context.Canceled {
+		t.Fatalf("canceled scan: %v", err)
+	}
+}
+
+func TestBookTextScanWaitHonorsCancellation(t *testing.T) {
+	bookTextScan <- struct{}{}
+	defer func() { <-bookTextScan }()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := scanBookText(ctx, &booktext.Book{}, []string{"test"}, false, nil, 1)
+	if err != context.Canceled {
+		t.Fatalf("scan while busy: %v", err)
+	}
+}

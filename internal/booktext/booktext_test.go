@@ -67,6 +67,16 @@ night.</p><script>alert(1)</script><p hidden="">secret</p><div style="display: n
 	}
 }
 
+func TestHTMLTextAfterSelfClosingRawTextTags(t *testing.T) {
+	for _, tag := range []string{"style", "title", "script"} {
+		doc := "<html><head><" + tag + "/></head><body><p>Readable chapter.</p></body></html>"
+		text, _ := htmlText([]byte(doc))
+		if text != "Readable chapter." {
+			t.Errorf("%s: %q", tag, text)
+		}
+	}
+}
+
 func TestChapterTitleBounds(t *testing.T) {
 	long := strings.Repeat("é", MaxTitleBytes)
 	_, heading := htmlText([]byte("<html><body><h1>" + long + "</h1></body></html>"))
@@ -93,10 +103,35 @@ func testBook() *Book {
 	return b
 }
 
+type cancelAfterChecks struct {
+	context.Context
+	checks int
+	after  int
+}
+
+func (c *cancelAfterChecks) Err() error {
+	c.checks++
+	if c.checks >= c.after {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestFindStopsOnCancellation(t *testing.T) {
+	b := &Book{Chapters: []Chapter{{Text: strings.Repeat("a", 100000)}}}
+	for _, after := range []int{3, 30} {
+		ctx := &cancelAfterChecks{Context: context.Background(), after: after}
+		hits, more := b.Find(ctx, []string{"b"}, false, 0, nil, 10)
+		if ctx.checks < after || len(hits) != 0 || more {
+			t.Fatalf("cancellation after %d checks: %d checks, %v, more %v", after, ctx.checks, hits, more)
+		}
+	}
+}
+
 func TestFindMentions(t *testing.T) {
 	b := testBook()
 	terms := []string{FoldQuery("Raskolnikov"), FoldQuery("Rodya"), FoldQuery("Rodion  Romanovich")}
-	hits, more := b.Find(terms, true, 0, nil, 100)
+	hits, more := b.Find(context.Background(), terms, true, 0, nil, 100)
 	if more {
 		t.Fatal("more reported")
 	}
@@ -110,15 +145,15 @@ func TestFindMentions(t *testing.T) {
 		t.Fatalf("hits = %q, want %q", got, want)
 	}
 
-	hits, more = b.Find(terms, true, 0, nil, 2)
+	hits, more = b.Find(context.Background(), terms, true, 0, nil, 2)
 	if len(hits) != 2 || !more {
 		t.Fatalf("limit: %d hits, more=%v", len(hits), more)
 	}
-	hits, _ = b.Find(terms, true, 0, &Position{Chapter: 1}, 100)
+	hits, _ = b.Find(context.Background(), terms, true, 0, &Position{Chapter: 1}, 100)
 	if len(hits) != 3 {
 		t.Fatalf("stop at chapter 2: %d hits", len(hits))
 	}
-	hits, _ = b.Find([]string{FoldQuery("emile")}, true, 0, nil, 10)
+	hits, _ = b.Find(context.Background(), []string{FoldQuery("emile")}, true, 0, nil, 10)
 	if len(hits) != 0 {
 		t.Fatal("phantom hit")
 	}
@@ -126,11 +161,11 @@ func TestFindMentions(t *testing.T) {
 
 func TestFindLimitsDistinctHits(t *testing.T) {
 	b := &Book{Chapters: []Chapter{{Text: "aaaa ... aa"}}}
-	hits, more := b.Find([]string{"aa"}, false, 0, nil, 2)
+	hits, more := b.Find(context.Background(), []string{"aa"}, false, 0, nil, 2)
 	if len(hits) != 2 || hits[0].Offset != 0 || hits[1].Offset != 2 || !more {
 		t.Fatalf("overlapping matches: %+v, more=%v", hits, more)
 	}
-	hits, more = b.Find([]string{"aa", "aaaa"}, false, 0, nil, 2)
+	hits, more = b.Find(context.Background(), []string{"aa", "aaaa"}, false, 0, nil, 2)
 	if len(hits) != 2 || hits[0].Term != 1 || hits[1].Offset != 9 || more {
 		t.Fatalf("overlapping terms: %+v, more=%v", hits, more)
 	}
@@ -139,7 +174,7 @@ func TestFindLimitsDistinctHits(t *testing.T) {
 func TestFindFoldsDiacritics(t *testing.T) {
 	b := &Book{Chapters: []Chapter{{Text: "Hier, Émile a vu ÉMILE."}}, bytes: 1}
 	b.fillSpans()
-	hits, _ := b.Find([]string{FoldQuery("emile")}, true, 0, nil, 10)
+	hits, _ := b.Find(context.Background(), []string{FoldQuery("emile")}, true, 0, nil, 10)
 	if len(hits) != 2 || b.Chapters[0].Text[hits[0].Offset:hits[0].Offset+hits[0].Length] != "Émile" {
 		t.Fatalf("hits = %+v", hits)
 	}
@@ -148,11 +183,11 @@ func TestFindFoldsDiacritics(t *testing.T) {
 func TestFindStopsAtMatchEnd(t *testing.T) {
 	b := &Book{Chapters: []Chapter{{Text: "Émile spoke"}}}
 	terms := []string{FoldQuery("Émile"), FoldQuery("Ém")}
-	hits, _ := b.Find(terms, false, 0, &Position{Offset: len("Ém")}, 10)
+	hits, _ := b.Find(context.Background(), terms, false, 0, &Position{Offset: len("Ém")}, 10)
 	if len(hits) != 1 || hits[0].Length != len("Ém") {
 		t.Fatalf("matches crossing the stop: %+v", hits)
 	}
-	hits, _ = b.Find(terms[:1], true, 0, &Position{Offset: len("Émile")}, 10)
+	hits, _ = b.Find(context.Background(), terms[:1], true, 0, &Position{Offset: len("Émile")}, 10)
 	if len(hits) != 1 || hits[0].Length != len("Émile") {
 		t.Fatalf("match ending at the stop: %+v", hits)
 	}
