@@ -33,6 +33,25 @@ const (
 	maxWindowBytes  = 1 << 20
 )
 
+var bookTextScan = make(chan struct{}, 1)
+
+func scanBookText(ctx context.Context, book *booktext.Book, terms []string, words bool, stop *booktext.Position, limit int) ([]booktext.Hit, bool, error) {
+	select {
+	case bookTextScan <- struct{}{}:
+		defer func() { <-bookTextScan }()
+	case <-ctx.Done():
+		return nil, false, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	hits, more := book.Find(ctx, terms, words, 0, stop, limit)
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	return hits, more, nil
+}
+
 func (m *mcpService) textTools() []mcp.Tool {
 	bookID := strProp("Book ID from search_library, get_book or a reading-status listing.", maxIDLen)
 	return []mcp.Tool{
@@ -605,7 +624,10 @@ func (m *mcpService) searchText(ctx context.Context, raw json.RawMessage) (any, 
 	if err != nil {
 		return nil, err
 	}
-	hits, more := t.Find([]string{term}, false, 0, nil, limit)
+	hits, more, err := scanBookText(ctx, t, []string{term}, false, nil, limit)
+	if err != nil {
+		return nil, err
+	}
 	results := []map[string]any{}
 	used := 0
 	for _, h := range hits {
@@ -716,7 +738,10 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 		}
 		out["stop_located_by"] = pl.by
 	}
-	hits, capped := t.Find(terms, true, 0, stop, maxMentionScan)
+	hits, capped, err := scanBookText(ctx, t, terms, true, stop, maxMentionScan)
+	if err != nil {
+		return nil, err
+	}
 	if skip > len(hits) {
 		return nil, mcp.Errorf("invalid cursor")
 	}
