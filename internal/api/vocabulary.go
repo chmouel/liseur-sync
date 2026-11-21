@@ -436,11 +436,10 @@ func strPtr(s string) *string {
 	return &s
 }
 
-// locatorJSONReason validates raw locator JSON before it is stored as
-// JSONB. It scans every raw string literal (keys, values, and shadowed
-// duplicates alike) so NUL escapes and unpaired UTF-16 surrogates —
-// both accepted by encoding/json but rejected by PostgreSQL JSONB — fail
-// as per-item invalid instead of aborting the batch.
+// locatorJSONReason validates raw locator JSON before storing it. It
+// scans every raw string literal (keys, values, and shadowed duplicates
+// alike) so NUL escapes and unpaired UTF-16 surrogates fail as per-item
+// invalid instead of being silently mangled or rejected downstream.
 func locatorJSONReason(raw []byte) string {
 	if !json.Valid(raw) {
 		return "occurrence locator is not valid JSON"
