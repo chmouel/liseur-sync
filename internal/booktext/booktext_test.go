@@ -217,6 +217,9 @@ func TestLocate(t *testing.T) {
 	if _, _, _, ok := b.Locate("missing.xhtml", nil, "", ""); ok {
 		t.Fatal("missing resource located")
 	}
+	if _, _, _, ok := b.Locate("one.xhtml", nil, "", "missing"); ok {
+		t.Fatal("unmatched quote without resource progression was located")
+	}
 	if ch, _, _ := b.AtProgression(0.99); ch != 2 {
 		t.Fatalf("AtProgression = %d", ch)
 	}
