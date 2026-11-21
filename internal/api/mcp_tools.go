@@ -858,7 +858,9 @@ func (m *mcpService) calendar(ctx context.Context, raw json.RawMessage) (any, er
 			days = append(days, d)
 		}
 	}
-	return map[string]any{"from": in.From, "to": in.To, "timezone": snap.Timezone, "days": days}, nil
+	out := map[string]any{"from": in.From, "to": in.To, "days": days}
+	describeSnapshot(snap, out)
+	return out, nil
 }
 
 func (m *mcpService) listVocabulary(ctx context.Context, raw json.RawMessage) (any, error) {
