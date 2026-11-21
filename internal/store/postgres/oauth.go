@@ -246,7 +246,7 @@ func (s *Store) RotateOAuthRefresh(
 		   FROM oauth_tokens t
 		   JOIN oauth_grants g ON g.id = t.grant_id
 		   JOIN users u ON u.id = g.user_id
-		  WHERE t.sha256 = ? AND t.kind = 'refresh'`), sha256).
+		  WHERE t.sha256 = ? AND t.kind = 'refresh' FOR UPDATE OF g`), sha256).
 		Scan(&used, &expires, &g.ID, &g.UserID, &g.ClientID, &g.ClientName,
 			&scopes, &g.Resource, &g.CreatedAt, &revoked, &disabled)
 	if errors.Is(err, sql.ErrNoRows) {

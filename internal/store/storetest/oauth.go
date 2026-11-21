@@ -231,6 +231,47 @@ func testOAuth(t *testing.T, open OpenFunc) {
 	}
 }
 
+func testOAuthReplayAfterHousekeep(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := t.Context()
+	u := MkUser(t, s, "replay")
+	now := time.Date(2026, time.May, 1, 12, 0, 0, 0, time.UTC)
+	client := store.OAuthClient{ID: "lsc_replay", Kind: store.OAuthClientRegistered, Name: "Replay", CreatedAt: now}
+	if err := s.CreateOAuthClient(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateOAuthCode(ctx, store.OAuthCode{SHA256: "code", UserID: u.ID, ClientID: client.ID, ClientName: client.Name, RedirectURI: testOAuthRedirect, CodeChallenge: testOAuthChallenge, Resource: testOAuthResource, Scopes: []string{"mcp:text"}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	newTokens := func(prefix string, at time.Time) []store.OAuthToken {
+		return []store.OAuthToken{{SHA256: prefix + "-access", Kind: store.OAuthTokenAccess, CreatedAt: at, ExpiresAt: at.Add(time.Hour)}, {SHA256: prefix + "-refresh", Kind: store.OAuthTokenRefresh, CreatedAt: at, ExpiresAt: at.Add(30 * 24 * time.Hour)}}
+	}
+	_, err := s.ExchangeOAuthCode(ctx, store.OAuthCodeRedemption{SHA256: "code", ClientID: client.ID, RedirectURI: testOAuthRedirect, CodeChallenge: testOAuthChallenge, Resource: testOAuthResource, GrantID: "grant", Tokens: newTokens("old", now)}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated := now.Add(29 * 24 * time.Hour)
+	if _, err := s.RotateOAuthRefresh(ctx, "old-refresh", client.ID, rotated, newTokens("new", rotated)); err != nil {
+		t.Fatal(err)
+	}
+	later := now.Add(31 * 24 * time.Hour)
+	if err := s.Housekeep(ctx, later); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RotateOAuthRefresh(ctx, "old-refresh", client.ID, later, newTokens("replay", later)); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("replay after housekeeping: %v", err)
+	}
+	if _, err := s.RotateOAuthRefresh(ctx, "new-refresh", client.ID, later, newTokens("again", later)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("grant remained active: %v", err)
+	}
+	if err := s.Housekeep(ctx, now.Add(90*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if grants, err := s.ListOAuthGrants(ctx, u.ID); err != nil || len(grants) != 0 {
+		t.Fatalf("expired grants: %+v %v", grants, err)
+	}
+}
+
 // testOAuthRevokeAllSpendsCodes proves that revoking every credential
 // spends an authorization code that was approved but never redeemed. A
 // code left alive is a grant in waiting: redeeming it after the

@@ -422,13 +422,22 @@ func (s *Store) Housekeep(ctx context.Context, now time.Time) error {
 		                       OR (revoked_at IS NOT NULL AND revoked_at < ?)`), grace, grace); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, q(`DELETE FROM oauth_codes WHERE expires_at < ?`), now.Add(-24*time.Hour)); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, q(`SELECT g.id FROM oauth_grants g
+		WHERE EXISTS (SELECT 1 FROM oauth_tokens t WHERE t.grant_id = g.id AND t.expires_at < ?)
+		ORDER BY g.id FOR UPDATE OF g`), now); err != nil {
+		return err
+	}
 	for _, stmt := range []struct {
 		sql  string
 		args []any
 	}{
-		// A spent code is kept a day so a late replay still revokes its grant.
-		{`DELETE FROM oauth_codes WHERE expires_at < ?`, []any{now.Add(-24 * time.Hour)}},
-		{`DELETE FROM oauth_tokens WHERE expires_at < ?`, []any{now}},
+		{`DELETE FROM oauth_tokens WHERE expires_at < ? AND (
+		    kind != 'refresh' OR used_at IS NULL OR NOT EXISTS (
+		        SELECT 1 FROM oauth_tokens active WHERE active.grant_id = oauth_tokens.grant_id
+		        AND active.used_at IS NULL AND active.expires_at >= ?))`, []any{now, now}},
 		{`DELETE FROM oauth_grants WHERE (revoked_at IS NOT NULL AND revoked_at < ?)
 		    OR (created_at < ? AND NOT EXISTS (
 		        SELECT 1 FROM oauth_tokens t WHERE t.grant_id = oauth_grants.id))`, []any{grace, grace}},
