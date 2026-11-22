@@ -140,7 +140,7 @@ templ settingsProfileBody(prefix string, u userCtx, csrf string, v settingsView)
 		// into a dialog with the same text in it.
 		<a
 			class="btn csvbtn"
-			href={ prefix + "library.csv?filter=all" }
+			href={ prefix + "export/library.csv?filter=all" }
 			data-csv-open="csv-dialog"
 			aria-haspopup="dialog"
 			aria-controls="csv-dialog"
