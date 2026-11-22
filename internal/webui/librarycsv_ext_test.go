@@ -40,7 +40,7 @@ func TestTheShelfExportsAsCSV(t *testing.T) {
 		}},
 	})
 
-	resp, body := f.get(t, "/ui/library.csv?folder="+f.folder+"&filter=all", f.cookie)
+	resp, body := f.get(t, "/ui/export/library.csv?folder="+f.folder+"&filter=all", f.cookie)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("export: got %d, want 200: %s", resp.StatusCode, body)
 	}
@@ -104,14 +104,14 @@ func TestTheExportIsEveryPageAndNothingElse(t *testing.T) {
 		})
 	}
 
-	_, body := f.get(t, "/ui/library.csv?folder="+f.folder+"&filter=all", f.cookie)
+	_, body := f.get(t, "/ui/export/library.csv?folder="+f.folder+"&filter=all", f.cookie)
 	if rows := csvRows(t, body); len(rows) != books+1 {
 		t.Fatalf("got %d rows, want %d books and a header", len(rows)-1, books)
 	}
 
 	// A chip is a question about the shelf; the export answers the one
 	// that was asked rather than quietly handing back everything.
-	_, body = f.get(t, "/ui/library.csv?folder="+f.folder+"&filter=finished", f.cookie)
+	_, body = f.get(t, "/ui/export/library.csv?folder="+f.folder+"&filter=finished", f.cookie)
 	if rows := csvRows(t, body); len(rows) != 1 {
 		t.Fatalf("the Finished chip exported %d books, want none", len(rows)-1)
 	}
@@ -138,7 +138,7 @@ func TestTheExportIsOnlyWhatTheReaderMaySee(t *testing.T) {
 	}
 	carol := f.login(t, "carol")
 
-	resp, body := f.get(t, "/ui/library.csv?folder="+f.folder+"&filter=all", carol)
+	resp, body := f.get(t, "/ui/export/library.csv?folder="+f.folder+"&filter=all", carol)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("a folder nobody granted: got %d, want 404", resp.StatusCode)
 	}
@@ -188,7 +188,7 @@ func TestTheExportCoversEveryGrantedFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, body := f.get(t, "/ui/library.csv?filter=all", f.cookie)
+	resp, body := f.get(t, "/ui/export/library.csv?filter=all", f.cookie)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("export: got %d, want 200: %s", resp.StatusCode, body)
 	}
@@ -213,7 +213,7 @@ func TestTheExportCarriesWhatTheReadingHalfKnows(t *testing.T) {
 	f, ids := libraryFixture(t)
 	for _, query := range []string{"filter=reading", "filter=all&sort=read"} {
 		t.Run(query, func(t *testing.T) {
-			_, body := f.get(t, "/ui/library.csv?folder="+f.folder+"&"+query, f.cookie)
+			_, body := f.get(t, "/ui/export/library.csv?folder="+f.folder+"&"+query, f.cookie)
 			var row []string
 			for _, r := range csvRows(t, body)[1:] {
 				if len(r) > 6 && r[6] == ids["midway"] {
@@ -244,6 +244,28 @@ func TestTheExportCarriesWhatTheReadingHalfKnows(t *testing.T) {
 	}
 }
 
+// TestTheExportLivesUnderOnePrefix pins where the files are: an export is
+// a download of the library in another format, so every one of them is
+// under /ui/export/. The old addresses are gone rather than redirected —
+// this server has no released version and no compatibility shims — and a
+// reader's stale bookmark has to fail loudly rather than quietly hand
+// back yesterday's column layout.
+func TestTheExportLivesUnderOnePrefix(t *testing.T) {
+	f := newBooksFixture(t)
+	for _, path := range []string{"/ui/library.csv"} {
+		resp, body := f.get(t, path, f.cookie)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s: got %d, want 404: %s", path, resp.StatusCode, body)
+		}
+	}
+	for _, path := range []string{"/ui/export/library.csv"} {
+		resp, body := f.get(t, path, f.cookie)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s: got %d, want 200: %s", path, resp.StatusCode, body)
+		}
+	}
+}
+
 // TestSettingsOffersTheExportDialog pins the wiring between the button,
 // the dialog and the module on the settings page: the button is a link
 // to the file, so the export still works with no script at all.
@@ -254,7 +276,7 @@ func TestSettingsOffersTheExportDialog(t *testing.T) {
 	for _, want := range []string{
 		`data-csv-open="csv-dialog"`,
 		`id="csv-dialog"`,
-		`library.csv?filter=all`,
+		`export/library.csv?filter=all`,
 		`download="library.csv"`,
 		`data-csv-copy`,
 		`library-csv.js`,

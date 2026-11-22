@@ -38,6 +38,28 @@ const csvDate = "2006-01-02"
 func (s *Server) handleLibraryCSV(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 ) {
+	rows, ok := s.exportShelfRows(w, r, u)
+	if !ok {
+		return
+	}
+	writeCSV(w, "library.csv", false, csvColumns, func(cw *csv.Writer) {
+		loc := userLoc(u)
+		for _, row := range rows {
+			_ = cw.Write(csvRecord(row, loc))
+		}
+	})
+}
+
+// exportShelfRows resolves the folder scope in the request and collects
+// every row the shelf would show, answering the error itself: a store
+// failure halfway down would leave a truncated file that looks complete,
+// and there is no place left to put an error once the body has begun.
+//
+// Every export reads the shelf through here, so no two files can disagree
+// about which books are in them.
+func (s *Server) exportShelfRows(
+	w http.ResponseWriter, r *http.Request, u *store.User,
+) ([]LibraryRow, bool) {
 	var folders []string
 	if folder := r.URL.Query().Get("folder"); folder != "" {
 		// FolderByID is the grant check: a folder this reader holds
@@ -45,7 +67,7 @@ func (s *Server) handleLibraryCSV(
 		// export cannot be used to ask about somebody else's shelf.
 		if _, err := s.St.FolderByID(r.Context(), u.ID, folder); err != nil {
 			http.NotFound(w, r)
-			return
+			return nil, false
 		}
 		folders = []string{folder}
 	} else {
@@ -56,7 +78,7 @@ func (s *Server) handleLibraryCSV(
 			page, err := s.St.ListFolders(r.Context(), u.ID, after, folderPickerLimit)
 			if err != nil {
 				http.Error(w, "internal", http.StatusInternalServerError)
-				return
+				return nil, false
 			}
 			for _, f := range page {
 				folders = append(folders, f.ID)
@@ -75,22 +97,29 @@ func (s *Server) handleLibraryCSV(
 	rows, err := s.exportRows(r, u, v, folders)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
-		return
+		return nil, false
 	}
-	// Nothing is written until every row is in hand, because a store
-	// failure halfway down would leave a truncated file that looks
-	// complete: there is no place left to put an error once the body
-	// has begun.
+	return rows, true
+}
+
+// writeCSV is the response half every export shares: the four headers a
+// downloaded file needs, then the header row and whatever rows the
+// caller writes. Nothing is emitted before writeRows runs, so a caller
+// that has to look something up per row still fails on a status code
+// rather than halfway down a file. crlf is for a format that asks for it
+// by name, since not every consumer of a CSV expects Unix line endings.
+func writeCSV(
+	w http.ResponseWriter, filename string, crlf bool,
+	columns []string, writeRows func(*csv.Writer),
+) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="library.csv"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	cw := csv.NewWriter(w)
-	_ = cw.Write(csvColumns)
-	loc := userLoc(u)
-	for _, row := range rows {
-		_ = cw.Write(csvRecord(row, loc))
-	}
+	cw.UseCRLF = crlf
+	_ = cw.Write(columns)
+	writeRows(cw)
 	cw.Flush()
 }
 
