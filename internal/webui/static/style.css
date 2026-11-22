@@ -954,6 +954,10 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 }
 .csvbtn .csv-icon { display: inline-flex; color: var(--muted); }
 .csvbtn .ui-icon { width: .95rem; height: .95rem; }
+/* Two files, side by side where there is room: they are a choice, and a
+   choice stacked in a column reads as "do both". */
+.csv-exports { display: flex; flex-wrap: wrap; gap: .5rem; }
+.csv-note { margin: .75rem 0 0; font-size: .82rem; max-width: 42rem; }
 .librarycontrols .refreshbtn {
 	background: none; border: 0; color: var(--muted); padding: .4rem;
 }

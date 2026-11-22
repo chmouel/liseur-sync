@@ -252,13 +252,13 @@ func TestTheExportCarriesWhatTheReadingHalfKnows(t *testing.T) {
 // back yesterday's column layout.
 func TestTheExportLivesUnderOnePrefix(t *testing.T) {
 	f := newBooksFixture(t)
-	for _, path := range []string{"/ui/library.csv"} {
+	for _, path := range []string{"/ui/library.csv", "/ui/library.goodreads.csv"} {
 		resp, body := f.get(t, path, f.cookie)
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("GET %s: got %d, want 404: %s", path, resp.StatusCode, body)
 		}
 	}
-	for _, path := range []string{"/ui/export/library.csv"} {
+	for _, path := range []string{"/ui/export/library.csv", "/ui/export/goodreads.csv"} {
 		resp, body := f.get(t, path, f.cookie)
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("GET %s: got %d, want 200: %s", path, resp.StatusCode, body)

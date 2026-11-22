@@ -299,12 +299,19 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("GET /ui/setup", sec(s.handleSetupPage))
 	mux.Handle("POST /ui/setup", sec(s.rateLimited(s.handleSetup)))
 	mux.Handle("GET /ui/library", sec(s.requireAuth(s.handleLibrary)))
-	// The shelf as a file, under one prefix: an export is a download of
-	// the library in some other format, and it will not stay at one. It is
-	// a GET with the page's own query string and no CSRF token, because it
-	// changes nothing: the same rows, read the same way, written as text
-	// instead of markup.
+	// The shelf as a file, all of it under one prefix: an export is a
+	// download of the library in some other format, and it will not stay
+	// at two. Each is a GET with the page's own query string and no CSRF
+	// token, because they change nothing: the same rows, read the same
+	// way, written as text instead of markup.
+	//
+	// The second is the same shelf written as the file Goodreads'
+	// importer reads. It is a separate address rather than a query
+	// parameter on the first, because the two files are not variations
+	// of each other: one is the shelf as a table, the other is a shelf
+	// going somewhere else.
 	mux.Handle("GET /ui/export/library.csv", sec(s.requireAuth(s.handleLibraryCSV)))
+	mux.Handle("GET /ui/export/goodreads.csv", sec(s.requireAuth(s.handleLibraryGoodreads)))
 	mux.Handle("GET /ui/works/{id}", sec(s.requireAuth(s.handleWork)))
 	mux.Handle("GET /ui/books/{id}", sec(s.requireAuth(s.handleBook)))
 	mux.Handle("GET /ui/books/{id}/download", sec(s.requireAuth(s.handleBookDownload)))

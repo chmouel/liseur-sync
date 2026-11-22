@@ -1,12 +1,14 @@
-// The library's CSV export, as a dialog instead of a download.
+// The library's CSV exports, as dialogs instead of downloads.
 //
-// The button is a real link to a real file, and this module is the
-// enhancement: it intercepts the click, opens the dialog and puts the
-// file's text in the textarea so the reader can look at what they are
-// about to take, copy it straight onto the clipboard, or download it
-// from the link in the dialog. Nothing here is required for the export
-// to work — a browser without modules, or a dialog primitive, simply
-// downloads the file the link named.
+// A button is a real link to a real file, and this module is the
+// enhancement: it intercepts the click, opens the dialog named on the
+// button and puts that file's text in it, so the reader can look at what
+// they are about to take, copy it straight onto the clipboard, or
+// download it from the link in the dialog. Nothing here is required for
+// an export to work — a browser without modules, or a dialog primitive,
+// simply downloads the file the link named. The two exports share this
+// module and every hook in it, which is why they are found by data
+// attribute rather than by id.
 //
 // The text is fetched rather than rendered into the page: the shelf can
 // be thousands of rows, and a reader who never opens the dialog should
@@ -19,7 +21,7 @@ function dialogFor(id) {
 }
 
 async function load(dialog, href) {
-  const text = dialog.querySelector("#csv-text");
+  const text = dialog.querySelector("[data-csv-text]");
   const hint = dialog.querySelector("[data-csv-hint]");
   const copyBtn = dialog.querySelector("[data-csv-copy]");
   if (!text) return;
@@ -84,7 +86,7 @@ function countLabel(csv) {
 }
 
 async function copy(dialog) {
-  const text = dialog.querySelector("#csv-text");
+  const text = dialog.querySelector("[data-csv-text]");
   const status = dialog.querySelector("[data-csv-status]");
   if (!text || !text.value) return;
   let copied = true;
