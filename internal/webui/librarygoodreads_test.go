@@ -147,7 +147,9 @@ func TestGoodreadsAuthorsAreNotACreditLine(t *testing.T) {
 // metadata must not reach the column. The book still imports, matched on
 // title and author.
 func TestGoodreadsRejectsAnISBNThatDoesNotValidate(t *testing.T) {
-	for _, bad := range []string{"9780575076847", "0575076846", "1234567890123", "12345"} {
+	// The last one is a checksum-valid EAN-13 from outside the ISBN
+	// prefixes: a barcode, not a book.
+	for _, bad := range []string{"9780575076847", "0575076846", "1234567890123", "12345", "4006381333931"} {
 		if got := isbnFromIdentifiers([]store.BookIdentifier{{Scheme: "isbn", Value: bad}}); got != (goodreadsISBN{}) {
 			t.Errorf("%q was exported as %+v", bad, got)
 		}

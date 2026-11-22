@@ -351,10 +351,13 @@ func validISBN10(s string) bool {
 	return sum%11 == 0
 }
 
-// validISBN13 checks the modulo-10 check digit of an ISBN-13, where
-// weights alternate 1 and 3.
+// validISBN13 checks what makes a thirteen-digit number an ISBN-13 and
+// not merely a well-formed EAN: a 978 or 979 prefix, which is the part of
+// the number that says "book", and a modulo-10 check digit, with weights
+// alternating 1 and 3. A barcode from a cereal box validates as an EAN and
+// answers nothing at Goodreads, so it is not written.
 func validISBN13(s string) bool {
-	if len(s) != 13 {
+	if len(s) != 13 || (!strings.HasPrefix(s, "978") && !strings.HasPrefix(s, "979")) {
 		return false
 	}
 	sum := 0
