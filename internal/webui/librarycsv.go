@@ -106,8 +106,8 @@ func (s *Server) exportShelfRows(
 // downloaded file needs, then the header row and whatever rows the
 // caller writes. Nothing is emitted before writeRows runs, so a caller
 // that has to look something up per row still fails on a status code
-// rather than halfway down a file. crlf is for a format that asks for it
-// by name, since not every consumer of a CSV expects Unix line endings.
+// rather than halfway down a file. crlf is for the format that asks for
+// it by name — Goodreads' own export is a Windows one.
 func writeCSV(
 	w http.ResponseWriter, filename string, crlf bool,
 	columns []string, writeRows func(*csv.Writer),

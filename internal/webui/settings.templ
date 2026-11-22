@@ -134,22 +134,69 @@ templ settingsProfileBody(prefix string, u userCtx, csrf string, v settingsView)
 	</section>
 	<section class="card settings-card">
 		<h2>Export library</h2>
-		<p class="muted">Export your book list and reading status as a CSV file to preview, copy, or download.</p>
+		<p class="muted">Export your book list and reading status as a CSV file — in this server's own columns, or in the ones Goodreads imports — to preview, copy, or download.</p>
 		// The export is a link to a file first and a preview second:
 		// with no script it downloads, and the module only turns it
 		// into a dialog with the same text in it.
-		<a
-			class="btn csvbtn"
-			href={ prefix + "export/library.csv?filter=all" }
-			data-csv-open="csv-dialog"
-			aria-haspopup="dialog"
-			aria-controls="csv-dialog"
-		>
-			<span class="csv-icon" aria-hidden="true">@uiIcon("Export")</span>
-			<span>Export as CSV</span>
-		</a>
+		//
+		// Two of them, because they answer different questions. The
+		// first is this server's own table, every column it knows. The
+		// second is the file Goodreads' importer reads, which has no
+		// room for a reading position or for a book id of ours.
+		<div class="csv-exports">
+			<a
+				class="btn csvbtn"
+				href={ prefix + "export/library.csv?filter=all" }
+				data-csv-open="csv-dialog"
+				aria-haspopup="dialog"
+				aria-controls="csv-dialog"
+			>
+				<span class="csv-icon" aria-hidden="true">@uiIcon("Export")</span>
+				<span>Export as CSV</span>
+			</a>
+			<a
+				class="btn csvbtn"
+				href={ prefix + "export/goodreads.csv?filter=all" }
+				data-csv-open="goodreads-dialog"
+				aria-haspopup="dialog"
+				aria-controls="goodreads-dialog"
+			>
+				<span class="csv-icon" aria-hidden="true">@uiIcon("Export")</span>
+				<span>Export for Goodreads</span>
+			</a>
+		</div>
+		<p class="muted csv-note">
+			The Goodreads file uses their import columns: title, author, ISBN,
+			reading status as one of their shelves, and the dates. A reading
+			position has no column there, so the two files are not the same
+			file.
+		</p>
 	</section>
-	@csvDialog(prefix, "library.csv?filter=all")
+	@csvDialog(prefix, csvDialogArgs{
+		ID: "csv-dialog",
+		Title: "Export as CSV",
+		URL: "export/library.csv?filter=all",
+		Filename: "library.csv",
+		Hint: "One row per book across your library.",
+	})
+	@csvDialog(prefix, csvDialogArgs{
+		ID: "goodreads-dialog",
+		Title: "Export for Goodreads",
+		URL: "export/goodreads.csv?filter=all",
+		Filename: "goodreads.csv",
+		Hint: "One row per book, in Goodreads' own import columns.",
+	})
+}
+
+// csvDialogArgs is what differs between the two exports' dialogs: which
+// file it shows, what to call it on the way out, and what the line above
+// the text says about it.
+type csvDialogArgs struct {
+	ID       string
+	Title    string
+	URL      string
+	Filename string
+	Hint     string
 }
 
 // csvDialog is the export's preview: the file itself, in a box big enough
@@ -160,29 +207,30 @@ templ settingsProfileBody(prefix string, u userCtx, csrf string, v settingsView)
 // reader who never opens this dialog never pays for the whole shelf being
 // serialized twice. Without the module the textarea stays a promise and
 // the Download link below it is still the real thing.
-templ csvDialog(prefix, exportURL string) {
-	<dialog id="csv-dialog" class="folder-dialog csv-dialog" aria-labelledby="csv-dialog-title">
+templ csvDialog(prefix string, a csvDialogArgs) {
+	<dialog id={ a.ID } class="folder-dialog csv-dialog" aria-labelledby={ a.ID + "-title" }>
 		<div class="dialog-head">
 			<div>
-				<h2 id="csv-dialog-title">Export as CSV</h2>
-				<p class="csv-hint" data-csv-hint>One row per book across your library.</p>
+				<h2 id={ a.ID + "-title" }>{ a.Title }</h2>
+				<p class="csv-hint" data-csv-hint>{ a.Hint }</p>
 			</div>
 			<form method="dialog">
 				<button type="submit" class="dialog-close" aria-label="Close">✕</button>
 			</form>
 		</div>
 		<textarea
-			id="csv-text"
+			id={ a.ID + "-text" }
 			class="csv-text"
 			placeholder="Loading…"
 			readonly
 			spellcheck="false"
 			rows="14"
-			aria-label="The CSV file"
+			aria-label={ a.Title }
+			data-csv-text
 		></textarea>
 		<div class="csv-actions">
 			<button type="button" class="btn" data-csv-copy disabled>Copy</button>
-			<a class="btn" href={ prefix + exportURL } download="library.csv">Download</a>
+			<a class="btn" href={ prefix + a.URL } download={ a.Filename }>Download</a>
 			<span class="muted csv-status" data-csv-status role="status"></span>
 		</div>
 	</dialog>
